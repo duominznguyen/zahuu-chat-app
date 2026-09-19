@@ -1,0 +1,319 @@
+// ============================================================
+// Zalo-like Chat App — Prisma Schema (MySQL)
+// ============================================================
+
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "mysql"
+}
+
+// ------------------------------------------------------------
+// 1. USER
+// ------------------------------------------------------------
+
+model User {
+  id                String    @id @default(uuid())
+  username          String    @unique // @handle, e.g. duominznguyen
+  usernameChangedAt DateTime? // to enforce cooldown before next change
+  email             String?   @unique // nullable: user could sign up purely via Google without email confirm flow if needed
+  passwordHash      String? // null if account only has OAuth providers (e.g. Google-only)
+  displayName       String
+  avatarUrl         String?
+  coverUrl          String?
+  bio               String?   @db.VarChar(255)
+  birthday          DateTime?
+  gender            Gender?
+  lastSeenAt        DateTime? // periodically updated; live online status lives in Redis
+  deactivatedAt     DateTime? // soft-delete / disable account
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+
+  authProviders AuthProvider[]
+  refreshTokens RefreshToken[]
+  deviceTokens  DeviceToken[]
+
+  sentFriendRequests     FriendRequest[] @relation("SentRequests")
+  receivedFriendRequests FriendRequest[] @relation("ReceivedRequests")
+  friendshipsAsUser1     Friendship[]    @relation("FriendshipUser1")
+  friendshipsAsUser2     Friendship[]    @relation("FriendshipUser2")
+
+  blocksInitiated Block[] @relation("BlockedBy")
+  blocksReceived  Block[] @relation("BlockedUser")
+
+  conversationsAsUser1 Conversation[]         @relation("DirectUser1")
+  conversationsAsUser2 Conversation[]         @relation("DirectUser2")
+  memberships          ConversationMember[]
+  nicknamesSet         ConversationNickname[] @relation("NicknameSetBy")
+
+  messagesSent     Message[]
+  messageReactions MessageReaction[]
+  messageDeletions MessageDeletion[]
+
+  createdInviteLinks GroupInviteLink[]
+
+  @@index([displayName])
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  OTHER
+}
+
+// ------------------------------------------------------------
+// AUTH
+// ------------------------------------------------------------
+
+model AuthProvider {
+  id                String           @id @default(uuid())
+  userId            String
+  provider          AuthProviderType
+  providerAccountId String // e.g. Google's `sub` claim
+  createdAt         DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+enum AuthProviderType {
+  LOCAL
+  GOOGLE
+  // FACEBOOK, APPLE, ... add later without touching User table
+}
+
+model RefreshToken {
+  id         String    @id @default(uuid())
+  userId     String
+  tokenHash  String    @unique // never store plaintext
+  expiresAt  DateTime
+  revokedAt  DateTime?
+  replacedBy String? // id of the token that rotated this one out, for reuse-detection
+  createdAt  DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model DeviceToken {
+  id        String         @id @default(uuid())
+  userId    String
+  fcmToken  String         @unique
+  platform  DevicePlatform
+  createdAt DateTime       @default(now())
+  updatedAt DateTime       @updatedAt
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+enum DevicePlatform {
+  IOS
+  ANDROID
+  WEB
+}
+
+// ------------------------------------------------------------
+// 2. FRIEND
+// ------------------------------------------------------------
+
+model FriendRequest {
+  id          String              @id @default(uuid())
+  senderId    String
+  receiverId  String
+  status      FriendRequestStatus @default(PENDING)
+  createdAt   DateTime            @default(now())
+  respondedAt DateTime?
+
+  sender   User @relation("SentRequests", fields: [senderId], references: [id], onDelete: Cascade)
+  receiver User @relation("ReceivedRequests", fields: [receiverId], references: [id], onDelete: Cascade)
+
+  @@unique([senderId, receiverId]) // avoid duplicate pending requests
+  @@index([receiverId, status])
+}
+
+enum FriendRequestStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+// Materialized friendship for fast "are they friends?" checks
+model Friendship {
+  id        String   @id @default(uuid())
+  userId1   String // enforce userId1 < userId2 at application layer
+  userId2   String
+  createdAt DateTime @default(now())
+
+  user1 User @relation("FriendshipUser1", fields: [userId1], references: [id], onDelete: Cascade)
+  user2 User @relation("FriendshipUser2", fields: [userId2], references: [id], onDelete: Cascade)
+
+  @@unique([userId1, userId2])
+  @@index([userId2])
+}
+
+model Block {
+  id        String   @id @default(uuid())
+  blockerId String
+  blockedId String
+  createdAt DateTime @default(now())
+
+  blocker User @relation("BlockedBy", fields: [blockerId], references: [id], onDelete: Cascade)
+  blocked User @relation("BlockedUser", fields: [blockedId], references: [id], onDelete: Cascade)
+
+  @@unique([blockerId, blockedId])
+}
+
+// ------------------------------------------------------------
+// 3 & 4. CONVERSATION (DIRECT + GROUP)
+// ------------------------------------------------------------
+
+model Conversation {
+  id            String           @id @default(uuid())
+  type          ConversationType
+  name          String? // group name only
+  avatarUrl     String? // group avatar only
+  backgroundUrl String? // shared background — applies to direct & group alike
+  // DIRECT-only fields: enforce userId1 < userId2 at application layer to prevent duplicate pairs
+  userId1       String?
+  userId2       String?
+  lastMessageAt DateTime?
+  createdAt     DateTime         @default(now())
+
+  user1 User? @relation("DirectUser1", fields: [userId1], references: [id])
+  user2 User? @relation("DirectUser2", fields: [userId2], references: [id])
+
+  members     ConversationMember[]
+  messages    Message[]
+  nicknames   ConversationNickname[]
+  inviteLinks GroupInviteLink[]
+
+  @@unique([userId1, userId2]) // one row per direct pair
+  @@index([lastMessageAt])
+}
+
+enum ConversationType {
+  DIRECT
+  GROUP
+}
+
+model ConversationMember {
+  id                String     @id @default(uuid())
+  conversationId    String
+  userId            String
+  role              MemberRole @default(MEMBER) // meaningful for GROUP only
+  lastReadMessageId String? // read-receipt cursor, avoids a row per message per user
+  lastReadAt        DateTime?
+  joinedAt          DateTime   @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([conversationId, userId])
+  @@index([userId])
+}
+
+enum MemberRole {
+  ADMIN
+  MEMBER
+}
+
+// Nicknames: shared/visible to everyone in the conversation (Messenger-style),
+// one nickname per (conversation, target user) — whoever last set it wins.
+model ConversationNickname {
+  id             String   @id @default(uuid())
+  conversationId String
+  targetUserId   String // the person being nicknamed
+  nickname       String
+  setById        String // who set it, for audit/attribution
+  updatedAt      DateTime @updatedAt
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  setBy        User         @relation("NicknameSetBy", fields: [setById], references: [id])
+
+  @@unique([conversationId, targetUserId])
+}
+
+model GroupInviteLink {
+  id             String   @id @default(uuid())
+  conversationId String
+  token          String   @unique
+  createdById    String
+  revoked        Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  createdBy    User         @relation(fields: [createdById], references: [id])
+
+  @@index([conversationId])
+}
+
+// ------------------------------------------------------------
+// 5. MESSAGE
+// ------------------------------------------------------------
+
+model Message {
+  id             String      @id @default(uuid())
+  conversationId String
+  senderId       String
+  type           MessageType
+  content        String?     @db.Text // text content, or sticker code
+  mediaUrl       String? // Cloudinary secure_url, for IMAGE/VIDEO/FILE
+  mediaPublicId  String? // Cloudinary public_id — required to delete the asset on recall
+  replyToId      String?
+  isRecalled     Boolean     @default(false)
+  recalledAt     DateTime?
+  createdAt      DateTime    @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  sender       User         @relation(fields: [senderId], references: [id])
+  replyTo      Message?     @relation("MessageReplies", fields: [replyToId], references: [id])
+  replies      Message[]    @relation("MessageReplies")
+
+  reactions MessageReaction[]
+  deletions MessageDeletion[] // "delete for me" records
+
+  @@index([conversationId, createdAt]) // cursor-based pagination
+}
+
+enum MessageType {
+  TEXT
+  IMAGE
+  VIDEO
+  FILE
+  STICKER
+}
+
+model MessageReaction {
+  id           String   @id @default(uuid())
+  messageId    String
+  userId       String
+  reactionType String // emoji code, e.g. "like", "love", "haha"
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId]) // one reaction per user per message; change = update, not insert
+}
+
+// "Delete for me" — hides a message only from this user's view
+model MessageDeletion {
+  id        String   @id @default(uuid())
+  messageId String
+  userId    String
+  deletedAt DateTime @default(now())
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  user    User    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([messageId, userId])
+}
