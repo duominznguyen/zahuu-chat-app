@@ -2,6 +2,7 @@ import {
   ConflictException,
   Injectable,
   UnauthorizedException,
+  BadRequestException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
@@ -21,6 +22,9 @@ import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
 import { GoogleAuthDto } from './dto/google-auth.dto.js';
 import { GoogleTokenVerifier } from './google-token.verifier.js';
+import { isUniqueViolation } from '../common/prisma-errors.js';
+import { ChangePasswordDto } from '../users/dto/change-password.dto.js';
+import { DeactivateAccountDto } from '../users/dto/deactivate-account.dto.js'
 
 const publicUserSelect = {
   id: true,
@@ -33,9 +37,6 @@ interface PendingRegistration {
   passwordHash: string;
   displayName: string;
 }
-
-const isUniqueViolation = (e: unknown) =>
-  typeof e === 'object' && e !== null && 'code' in e && e.code === 'P2002';
 
 @Injectable()
 export class AuthService {
@@ -113,21 +114,23 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
-
+  
     const valid =
-      user?.passwordHash &&
-      !user.deactivatedAt &&
-      (await verify(user.passwordHash, dto.password));
+      user?.passwordHash && (await verify(user.passwordHash, dto.password));
     if (!user || !valid) {
       throw new UnauthorizedException('Sai thông tin đăng nhập');
     }
-
+  
+    const reactivated = await this.reactivate(user.id, user.deactivatedAt);
+  
     const { id, username, displayName, avatarUrl } = user;
     return {
       user: { id, username, displayName, avatarUrl },
       ...(await this.issueTokens(user.id)),
+      reactivated,
     };
   }
+
 
   async googleLogin(dto: GoogleAuthDto) {
     const profile = await this.googleVerifier.verify(dto.idToken);
@@ -192,14 +195,13 @@ export class AuthService {
       }
     }
 
-    if (user.deactivatedAt) {
-      throw new UnauthorizedException('Tài khoản đã bị vô hiệu hóa');
-    }
+    const reactivated = await this.reactivate(user.id, user.deactivatedAt);
 
     const { id, username, displayName, avatarUrl } = user;
     return {
       user: { id, username, displayName, avatarUrl },
       ...(await this.issueTokens(user.id)),
+      reactivated,
     };
   }
 
@@ -210,9 +212,10 @@ export class AuthService {
 
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
-      select: { id: true, deactivatedAt: true },
+      select: { id: true },
     });
-    if (!user || user.deactivatedAt) return response;
+    if (!user) return response;
+
 
     if (!(await this.otp.tryAcquireCooldown('RESET_PASSWORD', dto.email))) {
       return response;
@@ -259,6 +262,52 @@ export class AuthService {
     ]);
 
     return { message: 'Đã đặt lại mật khẩu, vui lòng đăng nhập lại' };
+  }
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { passwordHash: true, deactivatedAt: true },
+    });
+    if (!user || user.deactivatedAt) {
+      throw new UnauthorizedException('Tài khoản không khả dụng');
+    }
+    if (!user.passwordHash) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'PASSWORD_NOT_SET',
+        message:
+          'Tài khoản chưa có mật khẩu, hãy dùng "Quên mật khẩu" để đặt mật khẩu',
+      });
+    }
+    if (!(await verify(user.passwordHash, dto.oldPassword))) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'INVALID_OLD_PASSWORD',
+        message: 'Mật khẩu hiện tại không đúng',
+      });
+    }
+    if (dto.oldPassword === dto.newPassword) {
+      throw new BadRequestException({
+        statusCode: 400,
+        code: 'SAME_PASSWORD',
+        message: 'Mật khẩu mới phải khác mật khẩu hiện tại',
+      });
+    }
+
+    const passwordHash = await hash(dto.newPassword);
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { passwordHash },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+    ]);
+
+    // Thiết bị đổi được cấp phiên mới, thiết bị khác đăng nhập lại
+    return this.issueTokens(userId);
   }
 
   async refresh(dto: RefreshTokenDto) {
@@ -371,4 +420,55 @@ export class AuthService {
   private hashToken(token: string) {
     return createHash('sha256').update(token).digest('hex');
   }
+
+  async deactivateAccount(userId: string, dto: DeactivateAccountDto) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { passwordHash: true, deactivatedAt: true },
+    });
+    if (!user || user.deactivatedAt) {
+      throw new UnauthorizedException('Tài khoản không khả dụng');
+    }
+
+    // Có mật khẩu thì phải nhập lại. Tài khoản chỉ có Google thì bỏ qua (hành động đảo ngược được)
+    if (user.passwordHash) {
+      if (!dto.password) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'PASSWORD_REQUIRED',
+          message: 'Vui lòng nhập mật khẩu để xác nhận',
+        });
+      }
+      if (!(await verify(user.passwordHash, dto.password))) {
+        throw new BadRequestException({
+          statusCode: 400,
+          code: 'INVALID_PASSWORD',
+          message: 'Mật khẩu không đúng',
+        });
+      }
+    }
+
+    await this.prisma.$transaction([
+      this.prisma.user.update({
+        where: { id: userId },
+        data: { deactivatedAt: new Date() },
+      }),
+      this.prisma.refreshToken.updateMany({
+        where: { userId, revokedAt: null },
+        data: { revokedAt: new Date() },
+      }),
+      this.prisma.deviceToken.deleteMany({ where: { userId } }),
+    ]);
+  }
+
+  /** Đăng nhập thành công vào tài khoản đã vô hiệu hóa thì kích hoạt lại. */
+  private async reactivate(userId: string, deactivatedAt: Date | null) {
+    if (!deactivatedAt) return false;
+    await this.prisma.user.update({
+      where: { id: userId },
+      data: { deactivatedAt: null },
+    });
+    return true;
+  }
+
 }

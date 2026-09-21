@@ -15,7 +15,7 @@ export class RedisService
   }
 
   async onModuleInit() {
-    await this.ping(); // báo lỗi khi Redis chưa run 
+    await this.ping(); // báo lỗi khi Redis chưa run
   }
 
   async onModuleDestroy() {

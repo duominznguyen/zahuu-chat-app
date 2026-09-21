@@ -29,5 +29,6 @@ import { GoogleTokenVerifier } from './google-token.verifier.js';
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     GoogleTokenVerifier,
   ],
+  exports: [AuthService],
 })
 export class AuthModule {}
