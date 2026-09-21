@@ -24,6 +24,13 @@ services:
       - '6379:6379'
     volumes:
       - redis_data:/data
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: zahuu-mailpit
+    restart: unless-stopped
+    ports:
+      - '1025:1025'
+      - '8025:8025'
 
 volumes:
   mysql_data:

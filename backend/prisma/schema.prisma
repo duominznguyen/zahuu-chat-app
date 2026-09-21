@@ -19,7 +19,7 @@ model User {
   id                String    @id @default(uuid())
   username          String    @unique // @handle, e.g. duominznguyen
   usernameChangedAt DateTime? // to enforce cooldown before next change
-  email             String?   @unique // nullable: user could sign up purely via Google without email confirm flow if needed
+  email             String?   @unique // always verified when present (OTP or Google). Nullable so future providers without email (GitHub private email, phone) still work
   passwordHash      String? // null if account only has OAuth providers (e.g. Google-only)
   displayName       String
   avatarUrl         String?
