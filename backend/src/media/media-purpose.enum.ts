@@ -1,0 +1,7 @@
+export enum MediaPurpose {
+  AVATAR = 'AVATAR',
+  COVER = 'COVER',
+  GROUP_AVATAR = 'GROUP_AVATAR',
+  BACKGROUND = 'BACKGROUND',
+  MESSAGE = 'MESSAGE',
+}

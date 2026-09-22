@@ -5,6 +5,7 @@ import {
   IsNotEmpty,
   IsOptional,
   IsString,
+  IsUrl,
   MaxLength,
   ValidateIf,
 } from 'class-validator';
@@ -35,4 +36,14 @@ export class UpdateProfileDto {
   @IsOptional()
   @IsEnum(Gender)
   gender?: Gender | null;
+
+  @IsOptional()
+  @Transform(trim)
+  @IsUrl({ require_protocol: true })
+  avatarUrl?: string | null;
+
+  @IsOptional()
+  @Transform(trim)
+  @IsUrl({ require_protocol: true })
+  coverUrl?: string | null;
 }

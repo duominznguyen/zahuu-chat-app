@@ -71,7 +71,7 @@ export class AuthService {
     return { message: 'Đã gửi lại mã xác thực', resendAfterSeconds: 60 };
   }
 
-  /** Bước 2: OTP đúng thì mới tạo User. */
+  /** OTP đúng thì mới tạo User. */
   async verifyEmail(dto: VerifyEmailDto) {
     const pending = await this.otp.verify<PendingRegistration>(
       'REGISTER',

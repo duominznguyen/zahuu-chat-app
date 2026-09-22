@@ -14,6 +14,9 @@ import { UpdateProfileDto } from './dto/update-profile.dto.js';
 import { RESERVED_USERNAMES } from './reserved-usernames.js';
 import { escapeLike } from '../common/escape-like.js';
 import { FriendRequestStatus } from '../generated/prisma/enums.js';
+import { MediaPurpose } from '../media/media-purpose.enum.js';
+import { MediaService } from '../media/media.service.js';
+
 
 
 type RelationshipStatus =
@@ -61,6 +64,7 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config: ConfigService,
+    private readonly media: MediaService,
   ) {}
 
   async getMe(userId: string) {
@@ -73,8 +77,9 @@ export class UsersService {
 
   async updateMe(userId: string, dto: UpdateProfileDto) {
     if (dto.birthday) this.assertValidBirthday(dto.birthday);
+    if (dto.avatarUrl) this.media.assertOwnedMedia(userId, MediaPurpose.AVATAR, dto.avatarUrl);
+    if (dto.coverUrl) this.media.assertOwnedMedia(userId, MediaPurpose.COVER, dto.coverUrl);
 
-    // Kiểm tra tài khoản còn hoạt động rồi mới ghi
     await this.getMe(userId);
 
     const user = await this.prisma.user.update({
@@ -84,11 +89,14 @@ export class UsersService {
         bio: dto.bio,
         birthday: dto.birthday ? new Date(dto.birthday) : dto.birthday,
         gender: dto.gender,
+        avatarUrl: dto.avatarUrl,
+        coverUrl: dto.coverUrl,
       },
       select: meSelect,
     });
     return this.toMe(user);
   }
+
 
   async search(userId: string, q: string) {
     return this.prisma.user.findMany({
@@ -96,7 +104,6 @@ export class UsersService {
         username: { startsWith: escapeLike(q) },
         deactivatedAt: null,
         id: { not: userId },
-        // loại những người đã chặn mình
         blocksInitiated: { none: { blockedId: userId } },
       },
       select: { id: true, username: true, displayName: true, avatarUrl: true },
@@ -139,12 +146,11 @@ export class UsersService {
     ]);
 
     if (!target || target.deactivatedAt) throw notFound();
-    //  đã bị chặn 
     if (blocks.some((b) => b.blockerId === targetId)) throw notFound();
 
     let status: RelationshipStatus;
     if (viewerId === targetId) status = 'self';
-    else if (blocks.length > 0) status = 'blocked'; // chỉ còn lượt chặn của mình
+    else if (blocks.length > 0) status = 'blocked';
     else if (friendship) status = 'friends';
     else if (requests.some((r) => r.senderId === targetId)) status = 'pending_received';
     else if (requests.length > 0) status = 'pending_sent';
@@ -242,7 +248,6 @@ export class UsersService {
 
     let count: number;
     try {
-      // chỉ ghi nếu usernameChangedAt chưa bị ai đổi kể từ lúc đọc
       ({ count } = await this.prisma.user.updateMany({
         where: { id: userId, usernameChangedAt: current.usernameChangedAt },
         data: { username, usernameChangedAt: new Date() },
@@ -260,7 +265,6 @@ export class UsersService {
     return this.getMe(userId);
   }
 
-  /** Trả về thời điểm được đổi tiếp, hoặc null nếu có thể đổi ngay. */
   private usernameChangeAvailableAt(changedAt: Date | null) {
     if (!changedAt) return null;
     const days = Number(this.config.get('USERNAME_CHANGE_COOLDOWN_DAYS') ?? 14);
