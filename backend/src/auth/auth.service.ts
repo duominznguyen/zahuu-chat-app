@@ -20,6 +20,7 @@ import { generateUniqueUsername } from './utils/username.util.js';
 import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
+import { LogoutDto } from './dto/logout.dto.js';
 import { GoogleAuthDto } from './dto/google-auth.dto.js';
 import { GoogleTokenVerifier } from './google-token.verifier.js';
 import { isUniqueViolation } from '../common/prisma-errors.js';
@@ -357,11 +358,16 @@ export class AuthService {
     return { accessToken, refreshToken: next.token };
   }
 
-  async logout(dto: RefreshTokenDto) {
+  async logout(dto: LogoutDto) {
     await this.prisma.refreshToken.updateMany({
       where: { tokenHash: this.hashToken(dto.refreshToken), revokedAt: null },
       data: { revokedAt: new Date() },
     });
+    if (dto.fcmToken) {
+      await this.prisma.deviceToken.deleteMany({
+        where: { fcmToken: dto.fcmToken },
+      });
+    }
   }
 
   private revokeAllTokens(userId: string) {

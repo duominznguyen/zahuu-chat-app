@@ -18,6 +18,7 @@ import { FriendsModule } from './friends/friends.module.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
 import { MessagesModule } from './messages/messages.module.js';
 import { ChatModule } from './chat/chat.module.js';
+import { NotificationsModule } from './notifications/notifications.module.js';
 
 @Module({
   imports: [
@@ -42,6 +43,7 @@ import { ChatModule } from './chat/chat.module.js';
     ConversationsModule,
     MessagesModule,
     ChatModule,
+    NotificationsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: AppThrottlerGuard }],

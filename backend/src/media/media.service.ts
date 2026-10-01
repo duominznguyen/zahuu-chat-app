@@ -115,16 +115,62 @@ export class MediaService {
     const invalid = () =>
       new ForbiddenException('URL media không hợp lệ hoặc không thuộc về bạn');
 
-    if (!url.startsWith(`https://res.cloudinary.com/${this.cloudName}/`)) {
+    // So khớp theo substring (includes/startsWith trên cả chuỗi url) từng bị
+    // qua mặt bằng cách nhét prefix của chính mình vào query string hoặc path
+    // thừa, trong khi path thật sự trỏ tới file của người khác (Cloudinary
+    // vẫn render đúng file đó). Phải parse URL rồi so khớp theo từng segment.
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw invalid();
+    }
+    if (parsed.protocol !== 'https:' || parsed.host !== 'res.cloudinary.com') {
       throw invalid();
     }
 
-    const expectedPrefix = `${this.folder}/${purpose}/${userId}/`;
-    if (publicId) {
-      if (!publicId.startsWith(expectedPrefix)) throw invalid();
-      if (!url.includes(publicId)) throw invalid();
-    } else if (!url.includes(expectedPrefix)) {
+    let segments: string[];
+    try {
+      segments = parsed.pathname
+        .split('/')
+        .filter(Boolean)
+        .map((s) => decodeURIComponent(s));
+    } catch {
       throw invalid();
+    }
+
+    let i = 0;
+    if (segments[i++] !== this.cloudName) throw invalid();
+    i++; // resource type (image/video/raw), không cần kiểm tra giá trị cụ thể
+    if (segments[i++] !== 'upload') throw invalid();
+    if (/^v\d+$/.test(segments[i] ?? '')) i++;
+    const publicIdSegments = segments.slice(i);
+
+    const expectedPrefixSegments = `${this.folder}/${purpose}/${userId}/`
+      .split('/')
+      .filter(Boolean);
+    const prefixMatches = expectedPrefixSegments.every(
+      (seg, idx) => publicIdSegments[idx] === seg,
+    );
+    if (!prefixMatches || publicIdSegments.length <= expectedPrefixSegments.length) {
+      throw invalid();
+    }
+
+    if (publicId) {
+      if (!publicId.startsWith(`${this.folder}/${purpose}/${userId}/`)) {
+        throw invalid();
+      }
+      const expected = publicId.split('/').filter(Boolean);
+      const expectedLast = expected[expected.length - 1];
+      const bodyMatches = expected
+        .slice(0, -1)
+        .every((seg, idx) => publicIdSegments[idx] === seg);
+      const actualLast = publicIdSegments[expected.length - 1] ?? '';
+      // Ảnh/video: Cloudinary tự thêm đuôi file vào url dù publicId không có đuôi.
+      const lastMatches =
+        actualLast === expectedLast ||
+        actualLast.startsWith(`${expectedLast}.`);
+      if (!bodyMatches || !lastMatches) throw invalid();
     }
   }
 
