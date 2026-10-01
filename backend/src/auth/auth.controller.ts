@@ -8,6 +8,7 @@ import { VerifyEmailDto } from './dto/verify-email.dto.js';
 import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
 import { RefreshTokenDto } from './dto/refresh-token.dto.js';
+import { LogoutDto } from './dto/logout.dto.js';
 import { Public } from './decorators/public.decorator.js';
 import { GoogleAuthDto } from './dto/google-auth.dto.js';
 
@@ -73,7 +74,7 @@ export class AuthController {
 
   @HttpCode(HttpStatus.NO_CONTENT)
   @Post('logout')
-  logout(@Body() dto: RefreshTokenDto) {
+  logout(@Body() dto: LogoutDto) {
     return this.authService.logout(dto);
   }
 }

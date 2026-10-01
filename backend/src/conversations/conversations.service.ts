@@ -164,7 +164,10 @@ export class ConversationsService {
         },
         select: { id: true },
       });
-      await this.emitMembersAdded(conv.id, [userId, friendId]);
+      await this.emitMembersAdded(conv.id, [userId, friendId], {
+        addedById: userId,
+        notifiable: false,
+      });
       return this.getConversationDetail(conv.id, userId);
     } catch (e) {
       // 2 request tạo cùng lúc -> bên thua lấy lại dòng đã có, không báo lỗi
@@ -227,7 +230,10 @@ export class ConversationsService {
       },
       select: { id: true },
     });
-    await this.emitMembersAdded(conv.id, [creatorId, ...memberIds]);
+    await this.emitMembersAdded(conv.id, [creatorId, ...memberIds], {
+      addedById: creatorId,
+      notifiable: true,
+    });
     return this.getConversationDetail(conv.id, creatorId);
   }
 
@@ -368,6 +374,8 @@ export class ConversationsService {
     this.events.emit('group.member.added', {
       conversationId: membership.conversationId,
       member: { ...member.user, role: member.role, joinedAt: member.joinedAt },
+      addedById: membership.userId,
+      notify: true,
     });
     return this.getConversationDetail(
       membership.conversationId,
@@ -546,6 +554,9 @@ export class ConversationsService {
           role: member.role,
           joinedAt: member.joinedAt,
         },
+        addedById: null,
+        // Tự join bằng link là hành động của chính mình -> không cần tự thông báo cho mình
+        notify: false,
       });
     } catch (e) {
       // Đã là thành viên rồi -> coi như thành công, không báo lỗi, không emit lại
@@ -555,11 +566,17 @@ export class ConversationsService {
   }
 
   /** Báo cho socket đang mở sẵn của từng thành viên ban đầu join room mới ngay,
-   *  không phải đợi họ tự emit conversation:join (dùng lại đúng event addMember). */
-  private async emitMembersAdded(conversationId: string, userIds: string[]) {
+   *  không phải đợi họ tự emit conversation:join (dùng lại đúng event addMember).
+   *  creatorId không nhận thông báo in-app vì chính họ vừa tạo conversation này. */
+  private async emitMembersAdded(
+    conversationId: string,
+    userIds: string[],
+    options: { addedById: string; notifiable: boolean },
+  ) {
     const members = await this.prisma.conversationMember.findMany({
       where: { conversationId, userId: { in: userIds } },
       select: {
+        userId: true,
         role: true,
         joinedAt: true,
         user: { select: publicUserSelect },
@@ -569,6 +586,8 @@ export class ConversationsService {
       this.events.emit('group.member.added', {
         conversationId,
         member: { ...m.user, role: m.role, joinedAt: m.joinedAt },
+        addedById: options.addedById,
+        notify: options.notifiable && m.userId !== options.addedById,
       });
     }
   }

@@ -55,6 +55,9 @@ model User {
 
   createdInviteLinks GroupInviteLink[]
 
+  notificationsReceived Notification[] @relation("NotificationRecipient")
+  notificationsActedOn  Notification[] @relation("NotificationActor")
+
   @@index([displayName])
 }
 
@@ -118,6 +121,32 @@ enum DevicePlatform {
   IOS
   ANDROID
   WEB
+}
+
+// In-app notification center — riêng biệt với việc gửi FCM push (đẩy qua BullMQ).
+// Gắn trực tiếp vào các event nghiệp vụ đã emit sẵn (friend.*, group.member.added),
+// không phải nguồn sự kiện riêng.
+model Notification {
+  id             String           @id @default(uuid())
+  userId         String // người nhận
+  type           NotificationType
+  actorId        String? // người gây ra hành động, null nếu hệ thống tự động
+  conversationId String? // chỉ có với GROUP_MEMBER_ADDED
+  isRead         Boolean          @default(false)
+  readAt         DateTime?
+  createdAt      DateTime         @default(now())
+
+  user         User          @relation("NotificationRecipient", fields: [userId], references: [id], onDelete: Cascade)
+  actor        User?         @relation("NotificationActor", fields: [actorId], references: [id], onDelete: SetNull)
+  conversation Conversation? @relation(fields: [conversationId], references: [id], onDelete: SetNull)
+
+  @@index([userId, isRead, createdAt]) // cursor-based pagination + đếm chưa đọc
+}
+
+enum NotificationType {
+  FRIEND_REQUEST_RECEIVED
+  FRIEND_REQUEST_ACCEPTED
+  GROUP_MEMBER_ADDED
 }
 
 // ------------------------------------------------------------
@@ -190,10 +219,11 @@ model Conversation {
   user1 User? @relation("DirectUser1", fields: [userId1], references: [id])
   user2 User? @relation("DirectUser2", fields: [userId2], references: [id])
 
-  members     ConversationMember[]
-  messages    Message[]
-  nicknames   ConversationNickname[]
-  inviteLinks GroupInviteLink[]
+  members       ConversationMember[]
+  messages      Message[]
+  nicknames     ConversationNickname[]
+  inviteLinks   GroupInviteLink[]
+  notifications Notification[]
 
   @@unique([userId1, userId2]) // one row per direct pair
   @@index([lastMessageAt])
