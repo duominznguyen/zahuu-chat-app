@@ -13,6 +13,7 @@ import { RedisModule } from './redis/redis.module.js';
 import { UsersModule } from './users/users.module.js';
 import { MediaModule } from './media/media.module.js';
 import { FriendsModule } from './friends/friends.module.js';
+import { ConversationsModule } from './conversations/conversations.module.js';
 
 @Module({
   imports: [
@@ -25,6 +26,7 @@ import { FriendsModule } from './friends/friends.module.js';
     UsersModule,
     MediaModule,
     FriendsModule,
+    ConversationsModule,
   ],
   controllers: [AppController],
   providers: [AppService, { provide: APP_GUARD, useClass: ThrottlerGuard }],
