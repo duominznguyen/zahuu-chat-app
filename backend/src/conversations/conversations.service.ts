@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomBytes } from 'node:crypto';
 import { assertActiveUser } from '../common/assert-active-user.js';
 import { assertCallerActive } from '../common/assert-caller-active.js';
@@ -33,6 +34,7 @@ export class ConversationsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly media: MediaService,
+    private readonly events: EventEmitter2,
   ) {}
 
   async listConversations(userId: string, cursor?: string, limit?: number) {
@@ -162,6 +164,7 @@ export class ConversationsService {
         },
         select: { id: true },
       });
+      await this.emitMembersAdded(conv.id, [userId, friendId]);
       return this.getConversationDetail(conv.id, userId);
     } catch (e) {
       // 2 request tạo cùng lúc -> bên thua lấy lại dòng đã có, không báo lỗi
@@ -224,6 +227,7 @@ export class ConversationsService {
       },
       select: { id: true },
     });
+    await this.emitMembersAdded(conv.id, [creatorId, ...memberIds]);
     return this.getConversationDetail(conv.id, creatorId);
   }
 
@@ -244,6 +248,13 @@ export class ConversationsService {
     await this.prisma.conversation.update({
       where: { id: membership.conversationId },
       data: { name: dto.name, avatarUrl: dto.avatarUrl },
+    });
+    this.events.emit('group.updated', {
+      conversationId: membership.conversationId,
+      changedFields: {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.avatarUrl !== undefined && { avatarUrl: dto.avatarUrl }),
+      },
     });
     return this.getConversationDetail(
       membership.conversationId,
@@ -266,6 +277,10 @@ export class ConversationsService {
       where: { id: membership.conversationId },
       data: { backgroundUrl: dto.url },
     });
+    this.events.emit('group.updated', {
+      conversationId: membership.conversationId,
+      changedFields: { backgroundUrl: dto.url },
+    });
     return this.getConversationDetail(
       membership.conversationId,
       membership.userId,
@@ -275,7 +290,7 @@ export class ConversationsService {
   async leaveConversation(membership: ConversationMembership) {
     await this.assertGroup(membership.conversationId);
 
-    await this.prisma.$transaction(async (tx) => {
+    const groupDeleted = await this.prisma.$transaction(async (tx) => {
       if (membership.role === MemberRole.ADMIN) {
         const canContinue = await this.promoteNextAdminIfNeeded(
           tx,
@@ -287,7 +302,7 @@ export class ConversationsService {
           await tx.conversation.delete({
             where: { id: membership.conversationId },
           });
-          return;
+          return true;
         }
       }
       await tx.conversationMember.delete({
@@ -298,7 +313,16 @@ export class ConversationsService {
           },
         },
       });
+      return false;
     });
+
+    // Nhóm đã bị xóa hẳn thì không còn room nào để báo
+    if (!groupDeleted) {
+      this.events.emit('group.member.removed', {
+        conversationId: membership.conversationId,
+        userId: membership.userId,
+      });
+    }
   }
 
   async disbandConversation(membership: ConversationMembership) {
@@ -317,12 +341,18 @@ export class ConversationsService {
     await assertActiveUser(this.prisma, targetUserId);
     await this.assertFriends(membership.userId, targetUserId);
 
+    let member;
     try {
-      await this.prisma.conversationMember.create({
+      member = await this.prisma.conversationMember.create({
         data: {
           conversationId: membership.conversationId,
           userId: targetUserId,
           role: MemberRole.MEMBER,
+        },
+        select: {
+          role: true,
+          joinedAt: true,
+          user: { select: publicUserSelect },
         },
       });
     } catch (e) {
@@ -335,6 +365,10 @@ export class ConversationsService {
       }
       throw e;
     }
+    this.events.emit('group.member.added', {
+      conversationId: membership.conversationId,
+      member: { ...member.user, role: member.role, joinedAt: member.joinedAt },
+    });
     return this.getConversationDetail(
       membership.conversationId,
       membership.userId,
@@ -359,6 +393,10 @@ export class ConversationsService {
     if (count === 0) {
       throw new NotFoundException('Người này không phải thành viên');
     }
+    this.events.emit('group.member.removed', {
+      conversationId: membership.conversationId,
+      userId: targetUserId,
+    });
   }
 
   async updateMemberRole(
@@ -430,6 +468,10 @@ export class ConversationsService {
       },
       update: { nickname, setById: membership.userId },
     });
+    this.events.emit('group.updated', {
+      conversationId: membership.conversationId,
+      changedFields: { nickname: { targetUserId, nickname } },
+    });
     return { targetUserId, nickname };
   }
 
@@ -485,18 +527,50 @@ export class ConversationsService {
     }
 
     try {
-      await this.prisma.conversationMember.create({
+      const member = await this.prisma.conversationMember.create({
         data: {
           conversationId: link.conversationId,
           userId,
           role: MemberRole.MEMBER,
         },
+        select: {
+          role: true,
+          joinedAt: true,
+          user: { select: publicUserSelect },
+        },
+      });
+      this.events.emit('group.member.added', {
+        conversationId: link.conversationId,
+        member: {
+          ...member.user,
+          role: member.role,
+          joinedAt: member.joinedAt,
+        },
       });
     } catch (e) {
-      // Đã là thành viên rồi -> coi như thành công, không báo lỗi
+      // Đã là thành viên rồi -> coi như thành công, không báo lỗi, không emit lại
       if (!isUniqueViolation(e)) throw e;
     }
     return this.getConversationDetail(link.conversationId, userId);
+  }
+
+  /** Báo cho socket đang mở sẵn của từng thành viên ban đầu join room mới ngay,
+   *  không phải đợi họ tự emit conversation:join (dùng lại đúng event addMember). */
+  private async emitMembersAdded(conversationId: string, userIds: string[]) {
+    const members = await this.prisma.conversationMember.findMany({
+      where: { conversationId, userId: { in: userIds } },
+      select: {
+        role: true,
+        joinedAt: true,
+        user: { select: publicUserSelect },
+      },
+    });
+    for (const m of members) {
+      this.events.emit('group.member.added', {
+        conversationId,
+        member: { ...m.user, role: m.role, joinedAt: m.joinedAt },
+      });
+    }
   }
 
   private assertAdmin(membership: ConversationMembership) {
