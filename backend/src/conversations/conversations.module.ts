@@ -9,5 +9,7 @@ import { InviteLinksController } from './invite-links.controller.js';
   imports: [MediaModule],
   controllers: [ConversationsController, InviteLinksController],
   providers: [ConversationsService, ConversationMemberGuard],
+  // Export guard để module Messages dùng lại cho /conversations/:id/messages, /conversations/:id/read
+  exports: [ConversationMemberGuard],
 })
 export class ConversationsModule {}
