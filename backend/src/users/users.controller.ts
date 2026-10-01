@@ -7,7 +7,8 @@ import {
   HttpCode,
   HttpStatus,
   Query,
-  Param, ParseUUIDPipe
+  Param,
+  ParseUUIDPipe,
 } from '@nestjs/common';
 import {
   CurrentUser,
@@ -68,7 +69,7 @@ export class UsersController {
   deactivate(@CurrentUser() user: AuthUser, @Body() dto: DeactivateAccountDto) {
     return this.authService.deactivateAccount(user.id, dto);
   }
-  
+
   @Get(':id')
   getProfile(
     @CurrentUser() user: AuthUser,

@@ -24,7 +24,7 @@ import { GoogleAuthDto } from './dto/google-auth.dto.js';
 import { GoogleTokenVerifier } from './google-token.verifier.js';
 import { isUniqueViolation } from '../common/prisma-errors.js';
 import { ChangePasswordDto } from '../users/dto/change-password.dto.js';
-import { DeactivateAccountDto } from '../users/dto/deactivate-account.dto.js'
+import { DeactivateAccountDto } from '../users/dto/deactivate-account.dto.js';
 
 const publicUserSelect = {
   id: true,
@@ -114,15 +114,15 @@ export class AuthService {
     const user = await this.prisma.user.findUnique({
       where: { email: dto.email },
     });
-  
+
     const valid =
       user?.passwordHash && (await verify(user.passwordHash, dto.password));
     if (!user || !valid) {
       throw new UnauthorizedException('Sai thông tin đăng nhập');
     }
-  
+
     const reactivated = await this.reactivate(user.id, user.deactivatedAt);
-  
+
     const { id, username, displayName, avatarUrl } = user;
     return {
       user: { id, username, displayName, avatarUrl },
@@ -130,7 +130,6 @@ export class AuthService {
       reactivated,
     };
   }
-
 
   async googleLogin(dto: GoogleAuthDto) {
     const profile = await this.googleVerifier.verify(dto.idToken);
@@ -215,7 +214,6 @@ export class AuthService {
       select: { id: true },
     });
     if (!user) return response;
-
 
     if (!(await this.otp.tryAcquireCooldown('RESET_PASSWORD', dto.email))) {
       return response;
@@ -470,5 +468,4 @@ export class AuthService {
     });
     return true;
   }
-
 }

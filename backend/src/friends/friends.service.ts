@@ -5,6 +5,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { assertCallerActive } from '../common/assert-caller-active.js';
 import { escapeLike } from '../common/escape-like.js';
 import { orderedPair } from '../common/ordered-pair.js';
@@ -24,7 +25,10 @@ const FRIENDS_SEARCH_LIMIT = 50;
 
 @Injectable()
 export class FriendsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly events: EventEmitter2,
+  ) {}
 
   async sendRequest(senderId: string, receiverId: string) {
     if (senderId === receiverId) {
@@ -110,6 +114,10 @@ export class FriendsService {
       create: { senderId, receiverId },
       update: { status: FriendRequestStatus.PENDING, respondedAt: null },
       select: { id: true, createdAt: true },
+    });
+    this.events.emit('friend.request.received', {
+      receiverId,
+      request: { id: request.id, senderId, createdAt: request.createdAt },
     });
 
     return { status: 'pending' as const, requestId: request.id };
@@ -329,5 +337,14 @@ export class FriendsService {
         data: orderedPair(senderId, receiverId),
       }),
     ]);
+    // báo cho cả 2 phía, vì request có thể auto-accept từ phía người gửi
+    this.events.emit('friend.accepted', {
+      userId: senderId,
+      otherUserId: receiverId,
+    });
+    this.events.emit('friend.accepted', {
+      userId: receiverId,
+      otherUserId: senderId,
+    });
   }
 }

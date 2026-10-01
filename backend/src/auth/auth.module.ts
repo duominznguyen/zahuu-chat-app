@@ -9,19 +9,18 @@ import { APP_GUARD } from '@nestjs/core';
 import { JwtAuthGuard } from './jwt-auth.guard.js';
 import { GoogleTokenVerifier } from './google-token.verifier.js';
 
+const jwtModule = JwtModule.registerAsync({
+  inject: [ConfigService],
+  useFactory: (config: ConfigService) => ({
+    secret: config.getOrThrow<string>('JWT_ACCESS_SECRET'),
+    signOptions: {
+      expiresIn: config.getOrThrow<string>('JWT_ACCESS_EXPIRES_IN') as any,
+    },
+  }),
+});
+
 @Module({
-  imports: [
-    JwtModule.registerAsync({
-      inject: [ConfigService],
-      useFactory: (config: ConfigService) => ({
-        secret: config.getOrThrow<string>('JWT_ACCESS_SECRET'),
-        signOptions: {
-          expiresIn: config.getOrThrow<string>('JWT_ACCESS_EXPIRES_IN') as any,
-        },
-      }),
-    }),
-    MailModule,
-  ],
+  imports: [jwtModule, MailModule],
   controllers: [AuthController],
   providers: [
     AuthService,
@@ -29,6 +28,7 @@ import { GoogleTokenVerifier } from './google-token.verifier.js';
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     GoogleTokenVerifier,
   ],
-  exports: [AuthService],
+  // Export JwtModule để ChatGateway verify access token lúc handshake, dùng chung 1 cấu hình secret
+  exports: [AuthService, jwtModule],
 })
 export class AuthModule {}
