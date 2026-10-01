@@ -18,7 +18,12 @@ import { MediaPurpose } from './media-purpose.enum.js';
 type MediaCategory = 'image' | 'video' | 'file';
 type ResourceType = 'image' | 'video' | 'raw';
 
-const IMAGE_MIMES = new Set(['image/jpeg', 'image/png', 'image/webp', 'image/gif']);
+const IMAGE_MIMES = new Set([
+  'image/jpeg',
+  'image/png',
+  'image/webp',
+  'image/gif',
+]);
 const VIDEO_MIMES = new Set(['video/mp4', 'video/quicktime', 'video/webm']);
 const FILE_MIMES = new Set([
   'application/pdf',
@@ -52,11 +57,17 @@ export class MediaService {
     });
   }
 
-  async upload(userId: string, purpose: MediaPurpose, file: Express.Multer.File) {
+  async upload(
+    userId: string,
+    purpose: MediaPurpose,
+    file: Express.Multer.File,
+  ) {
     const detected = await fileTypeFromBuffer(file.buffer);
     const category = detected ? this.categoryOf(detected.mime) : null;
     if (!category) {
-      throw new UnsupportedMediaTypeException('Định dạng file không được hỗ trợ');
+      throw new UnsupportedMediaTypeException(
+        'Định dạng file không được hỗ trợ',
+      );
     }
     if (category !== 'image' && IMAGE_ONLY_PURPOSES.has(purpose)) {
       throw new UnsupportedMediaTypeException(`${purpose} chỉ chấp nhận ảnh`);
@@ -92,7 +103,7 @@ export class MediaService {
 
   /**
    * Xác nhận url/publicId thuộc đúng user + purpose, trước khi lưu vào DB
-   * hoặc trước khi xóa. 
+   * hoặc trước khi xóa.
    * Dùng cho avatar/cover/background (chỉ có url) và message (có cả url lẫn publicId).
    */
   assertOwnedMedia(
@@ -118,7 +129,9 @@ export class MediaService {
   }
 
   async deleteAsset(publicId: string, resourceType: ResourceType) {
-    await cloudinary.uploader.destroy(publicId, { resource_type: resourceType });
+    await cloudinary.uploader.destroy(publicId, {
+      resource_type: resourceType,
+    });
   }
 
   private categoryOf(mime: string): MediaCategory | null {
@@ -140,10 +153,14 @@ export class MediaService {
 
   private uploadBuffer(buffer: Buffer, options: UploadApiOptions) {
     return new Promise<UploadApiResponse>((resolve, reject) => {
-      const stream = cloudinary.uploader.upload_stream(options, (error, result) => {
-        if (error || !result) return reject(error ?? new Error('Upload thất bại'));
-        resolve(result);
-      });
+      const stream = cloudinary.uploader.upload_stream(
+        options,
+        (error, result) => {
+          if (error || !result)
+            return reject(error ?? new Error('Upload thất bại'));
+          resolve(result);
+        },
+      );
       Readable.from(buffer).pipe(stream);
     });
   }

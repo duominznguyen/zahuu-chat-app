@@ -267,6 +267,8 @@ model Message {
   content        String?     @db.Text // text content, or sticker code
   mediaUrl       String? // Cloudinary secure_url, for IMAGE/VIDEO/FILE
   mediaPublicId  String? // Cloudinary public_id — required to delete the asset on recall
+  mediaName      String? // original filename, for FILE (display only, not trusted for access)
+  mediaSize      Int? // bytes, for FILE (display only)
   replyToId      String?
   isRecalled     Boolean     @default(false)
   recalledAt     DateTime?
