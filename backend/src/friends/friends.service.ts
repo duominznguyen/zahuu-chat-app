@@ -4,8 +4,8 @@ import {
   ForbiddenException,
   Injectable,
   NotFoundException,
-  UnauthorizedException,
 } from '@nestjs/common';
+import { assertCallerActive } from '../common/assert-caller-active.js';
 import { escapeLike } from '../common/escape-like.js';
 import { orderedPair } from '../common/ordered-pair.js';
 import { FriendRequestStatus } from '../generated/prisma/enums.js';
@@ -35,7 +35,7 @@ export class FriendsService {
       });
     }
 
-    await this.assertActiveUser(senderId);
+    await assertCallerActive(this.prisma, senderId);
 
     const notFound = () => new NotFoundException('Không tìm thấy người dùng');
 
@@ -95,7 +95,6 @@ export class FriendsService {
         message: 'Bạn đã gửi lời mời cho người này rồi',
       });
     }
-
 
     if (incoming?.status === FriendRequestStatus.PENDING) {
       await this.acceptExisting(
@@ -157,7 +156,7 @@ export class FriendsService {
     requestId: string,
     action: 'accept' | 'reject',
   ) {
-    await this.assertActiveUser(userId);
+    await assertCallerActive(this.prisma, userId);
 
     const request = await this.prisma.friendRequest.findUnique({
       where: { id: requestId },
@@ -185,7 +184,7 @@ export class FriendsService {
   }
 
   async cancelRequest(userId: string, requestId: string) {
-    await this.assertActiveUser(userId);
+    await assertCallerActive(this.prisma, userId);
 
     const request = await this.prisma.friendRequest.findUnique({
       where: { id: requestId },
@@ -234,7 +233,6 @@ export class FriendsService {
     };
   }
 
-  
   async searchFriends(userId: string, q: string) {
     const needle = escapeLike(q);
 
@@ -273,7 +271,7 @@ export class FriendsService {
     if (blockerId === blockedId) {
       throw new BadRequestException('Không thể tự chặn chính mình');
     }
-    await this.assertActiveUser(blockerId);
+    await assertCallerActive(this.prisma, blockerId);
 
     const target = await this.prisma.user.findUnique({
       where: { id: blockedId },
@@ -304,7 +302,7 @@ export class FriendsService {
   }
 
   async unblockUser(blockerId: string, blockedId: string) {
-    await this.assertActiveUser(blockerId);
+    await assertCallerActive(this.prisma, blockerId);
     await this.prisma.block.deleteMany({ where: { blockerId, blockedId } });
   }
 
@@ -331,16 +329,5 @@ export class FriendsService {
         data: orderedPair(senderId, receiverId),
       }),
     ]);
-  }
-
- 
-  private async assertActiveUser(userId: string) {
-    const user = await this.prisma.user.findUnique({
-      where: { id: userId },
-      select: { deactivatedAt: true },
-    });
-    if (!user || user.deactivatedAt) {
-      throw new UnauthorizedException('Tài khoản không khả dụng');
-    }
   }
 }

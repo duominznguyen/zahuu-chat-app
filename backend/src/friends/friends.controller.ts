@@ -25,7 +25,6 @@ export class FriendsController {
     return this.friendsService.listFriends(user.id, dto.cursor, dto.limit);
   }
 
-
   @Get('search')
   search(@CurrentUser() user: AuthUser, @Query() dto: SearchFriendsDto) {
     return this.friendsService.searchFriends(user.id, dto.q);
