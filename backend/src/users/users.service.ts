@@ -4,10 +4,11 @@ import {
   ForbiddenException,
   Injectable,
   UnauthorizedException,
-  NotFoundException 
+  NotFoundException,
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { isUniqueViolation } from '../common/prisma-errors.js';
+import { orderedPair } from '../common/ordered-pair.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import { ChangeUsernameDto } from './dto/change-username.dto.js';
 import { UpdateProfileDto } from './dto/update-profile.dto.js';
@@ -17,15 +18,8 @@ import { FriendRequestStatus } from '../generated/prisma/enums.js';
 import { MediaPurpose } from '../media/media-purpose.enum.js';
 import { MediaService } from '../media/media.service.js';
 
-
-
 type RelationshipStatus =
-  | 'self'
-  | 'none'
-  | 'pending_sent'
-  | 'pending_received'
-  | 'friends'
-  | 'blocked';
+  'self' | 'none' | 'pending_sent' | 'pending_received' | 'friends' | 'blocked';
 
 const profileSelect = {
   id: true,
@@ -58,7 +52,6 @@ const meSelect = {
 
 const SEARCH_LIMIT = 10;
 
-
 @Injectable()
 export class UsersService {
   constructor(
@@ -77,8 +70,10 @@ export class UsersService {
 
   async updateMe(userId: string, dto: UpdateProfileDto) {
     if (dto.birthday) this.assertValidBirthday(dto.birthday);
-    if (dto.avatarUrl) this.media.assertOwnedMedia(userId, MediaPurpose.AVATAR, dto.avatarUrl);
-    if (dto.coverUrl) this.media.assertOwnedMedia(userId, MediaPurpose.COVER, dto.coverUrl);
+    if (dto.avatarUrl)
+      this.media.assertOwnedMedia(userId, MediaPurpose.AVATAR, dto.avatarUrl);
+    if (dto.coverUrl)
+      this.media.assertOwnedMedia(userId, MediaPurpose.COVER, dto.coverUrl);
 
     await this.getMe(userId);
 
@@ -96,7 +91,6 @@ export class UsersService {
     });
     return this.toMe(user);
   }
-
 
   async search(userId: string, q: string) {
     return this.prisma.user.findMany({
@@ -130,7 +124,7 @@ export class UsersService {
         select: { blockerId: true },
       }),
       this.prisma.friendship.findUnique({
-        where: { userId1_userId2: this.orderedPair(viewerId, targetId) },
+        where: { userId1_userId2: orderedPair(viewerId, targetId) },
         select: { id: true },
       }),
       this.prisma.friendRequest.findMany({
@@ -152,7 +146,8 @@ export class UsersService {
     if (viewerId === targetId) status = 'self';
     else if (blocks.length > 0) status = 'blocked';
     else if (friendship) status = 'friends';
-    else if (requests.some((r) => r.senderId === targetId)) status = 'pending_received';
+    else if (requests.some((r) => r.senderId === targetId))
+      status = 'pending_received';
     else if (requests.length > 0) status = 'pending_sent';
     else status = 'none';
 
@@ -165,12 +160,6 @@ export class UsersService {
       relationshipStatus: status,
     };
   }
-
-
-  private orderedPair(a: string, b: string) {
-    return a < b ? { userId1: a, userId2: b } : { userId1: b, userId2: a };
-  }
-
 
   private assertValidBirthday(value: string) {
     const date = new Date(value);
