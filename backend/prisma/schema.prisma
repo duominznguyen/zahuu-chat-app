@@ -214,10 +214,14 @@ model Conversation {
   userId1       String?
   userId2       String?
   lastMessageAt DateTime?
+  // Trỏ tới Message thật (không denormalize nội dung) để preview luôn khớp
+  // trạng thái mới nhất của tin đó (vd tự ẩn nội dung nếu tin bị thu hồi sau đó).
+  lastMessageId String?          @unique
   createdAt     DateTime         @default(now())
 
-  user1 User? @relation("DirectUser1", fields: [userId1], references: [id])
-  user2 User? @relation("DirectUser2", fields: [userId2], references: [id])
+  user1       User?    @relation("DirectUser1", fields: [userId1], references: [id])
+  user2       User?    @relation("DirectUser2", fields: [userId2], references: [id])
+  lastMessage Message? @relation("ConversationLastMessage", fields: [lastMessageId], references: [id], onDelete: SetNull)
 
   members       ConversationMember[]
   messages      Message[]
@@ -309,8 +313,11 @@ model Message {
   replyTo      Message?     @relation("MessageReplies", fields: [replyToId], references: [id])
   replies      Message[]    @relation("MessageReplies")
 
-  reactions MessageReaction[]
-  deletions MessageDeletion[] // "delete for me" records
+  reactions      MessageReaction[]
+  deletions      MessageDeletion[] // "delete for me" records
+  // back-relation bắt buộc cho Conversation.lastMessageId — 1 message chỉ có thể
+  // là "tin cuối" của đúng 1 conversation (conversationId của nó) nên @unique ở trên là đúng
+  lastMessageFor Conversation?     @relation("ConversationLastMessage")
 
   @@index([conversationId, createdAt]) // cursor-based pagination
 }

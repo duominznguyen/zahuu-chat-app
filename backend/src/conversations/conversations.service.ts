@@ -12,7 +12,11 @@ import { assertCallerActive } from '../common/assert-caller-active.js';
 import { isUniqueViolation } from '../common/prisma-errors.js';
 import { orderedPair } from '../common/ordered-pair.js';
 import type { ConversationMembership } from './decorators/membership.decorator.js';
-import { ConversationType, MemberRole } from '../generated/prisma/enums.js';
+import {
+  ConversationType,
+  MemberRole,
+  MessageType,
+} from '../generated/prisma/enums.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import { MediaPurpose } from '../media/media-purpose.enum.js';
 import { MediaService } from '../media/media.service.js';
@@ -50,7 +54,17 @@ export class ConversationsService {
           select: {
             userId: true,
             role: true,
+            lastReadMessageId: true,
             user: { select: publicUserSelect },
+          },
+        },
+        lastMessage: {
+          select: {
+            id: true,
+            type: true,
+            content: true,
+            isRecalled: true,
+            senderId: true,
           },
         },
       },
@@ -97,6 +111,8 @@ export class ConversationsService {
             userId: true,
             role: true,
             joinedAt: true,
+            lastReadMessageId: true,
+            lastReadAt: true,
             user: { select: publicUserSelect },
           },
           orderBy: { joinedAt: 'asc' },
@@ -114,6 +130,8 @@ export class ConversationsService {
       nickname: nicknameMap.get(m.userId) ?? null,
       role: m.role,
       joinedAt: m.joinedAt,
+      lastReadMessageId: m.lastReadMessageId,
+      lastReadAt: m.lastReadAt,
     }));
     const me = conv.members.find((m) => m.userId === viewerId);
 
@@ -661,9 +679,17 @@ export class ConversationsService {
       avatarUrl: string | null;
       backgroundUrl: string | null;
       lastMessageAt: Date | null;
+      lastMessage: {
+        id: string;
+        type: MessageType;
+        content: string | null;
+        isRecalled: boolean;
+        senderId: string;
+      } | null;
       members: Array<{
         userId: string;
         role: MemberRole;
+        lastReadMessageId: string | null;
         user: {
           id: string;
           username: string;
@@ -676,6 +702,18 @@ export class ConversationsService {
     nicknameMap: Map<string, string>,
   ) {
     const me = conv.members.find((m) => m.userId === viewerId);
+    // Không đếm số tin chưa đọc chính xác (tốn 1 query COUNT/conversation) — chỉ
+    // cần biết CÓ tin chưa đọc hay không, giống cách lastReadMessageId đã đơn giản hoá.
+    const unread =
+      conv.lastMessage !== null &&
+      conv.lastMessage.id !== me?.lastReadMessageId;
+    const lastMessage = conv.lastMessage && {
+      id: conv.lastMessage.id,
+      type: conv.lastMessage.type,
+      content: conv.lastMessage.isRecalled ? null : conv.lastMessage.content,
+      isRecalled: conv.lastMessage.isRecalled,
+      senderId: conv.lastMessage.senderId,
+    };
 
     if (conv.type === ConversationType.GROUP) {
       return {
@@ -685,6 +723,8 @@ export class ConversationsService {
         avatarUrl: conv.avatarUrl,
         backgroundUrl: conv.backgroundUrl,
         lastMessageAt: conv.lastMessageAt,
+        lastMessage,
+        unread,
         role: me?.role ?? null,
         memberCount: conv.members.length,
       };
@@ -701,6 +741,8 @@ export class ConversationsService {
       avatarUrl: other?.user.avatarUrl ?? null,
       backgroundUrl: conv.backgroundUrl,
       lastMessageAt: conv.lastMessageAt,
+      lastMessage,
+      unread,
       role: me?.role ?? null,
       otherUser: other
         ? { id: other.user.id, username: other.user.username }

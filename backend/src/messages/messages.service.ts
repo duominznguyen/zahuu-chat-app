@@ -159,7 +159,7 @@ export class MessagesService {
       });
       await tx.conversation.update({
         where: { id: membership.conversationId },
-        data: { lastMessageAt: created.createdAt },
+        data: { lastMessageAt: created.createdAt, lastMessageId: created.id },
       });
       return created;
     });
