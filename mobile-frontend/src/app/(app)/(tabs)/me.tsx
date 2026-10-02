@@ -1,3 +1,4 @@
+import { useRouter } from "expo-router";
 import { Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -7,6 +8,7 @@ import { useAuthStore } from "@/store/auth-store";
 
 // M11 sẽ thêm menu đầy đủ (chỉnh sửa hồ sơ, đổi username/mật khẩu, danh sách chặn...).
 export default function MeTab() {
+  const router = useRouter();
   const user = useAuthStore((s) => s.user);
 
   return (
@@ -23,7 +25,13 @@ export default function MeTab() {
           @{user?.username}
         </Text>
       </View>
-      <View className="w-full pt-6">
+      <View className="w-full gap-3 pt-6">
+        <Button
+          variant="secondary"
+          onPress={() => router.push("/blocked-users")}
+        >
+          Danh sách chặn
+        </Button>
         <Button variant="destructive" onPress={() => logout()}>
           Đăng xuất
         </Button>
