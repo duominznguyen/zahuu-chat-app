@@ -23,8 +23,13 @@ interface MessageBubbleProps {
   isOwn: boolean;
   senderName: string;
   senderAvatarUrl?: string | null;
+  // Ẩn khi tin này không phải tin CUỐI trong 1 chuỗi liên tiếp cùng người gửi
+  // (kiểu Messenger) — vẫn chừa đúng khoảng trống của avatar để không lệch hàng.
+  showAvatar?: boolean;
   onLongPress?: () => void;
 }
+
+const AVATAR_SIZE = 28;
 
 const REACTION_ICON: Record<string, string> = {
   like: "👍",
@@ -45,13 +50,24 @@ export function MessageBubble({
   isOwn,
   senderName,
   senderAvatarUrl,
+  showAvatar = true,
   onLongPress,
 }: MessageBubbleProps) {
   if (message.isRecalled) {
     return (
       <View
-        className={`mb-2 flex-row ${isOwn ? "justify-end" : "justify-start"}`}
+        className={`mb-2 flex-row items-end gap-2 ${isOwn ? "justify-end" : "justify-start"}`}
       >
+        {!isOwn &&
+          (showAvatar ? (
+            <Avatar
+              uri={senderAvatarUrl}
+              name={senderName}
+              size={AVATAR_SIZE}
+            />
+          ) : (
+            <View style={{ width: AVATAR_SIZE }} />
+          ))}
         <View className="max-w-[75%] rounded-2xl bg-zinc-100 px-4 py-2.5 dark:bg-zinc-800">
           <Text className="text-sm italic text-zinc-500 dark:text-zinc-400">
             Tin nhắn đã thu hồi
@@ -72,7 +88,12 @@ export function MessageBubble({
     <View
       className={`mb-2 flex-row items-end gap-2 ${isOwn ? "justify-end" : "justify-start"}`}
     >
-      {!isOwn && <Avatar uri={senderAvatarUrl} name={senderName} size={28} />}
+      {!isOwn &&
+        (showAvatar ? (
+          <Avatar uri={senderAvatarUrl} name={senderName} size={AVATAR_SIZE} />
+        ) : (
+          <View style={{ width: AVATAR_SIZE }} />
+        ))}
       <Pressable className="max-w-[75%]" onLongPress={onLongPress}>
         <View className={`rounded-2xl px-4 py-2.5 ${bubbleColor}`}>
           {message.replyTo && (

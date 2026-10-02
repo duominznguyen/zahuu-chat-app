@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import type { ReactNode } from "react";
 import { Modal, Pressable, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 
@@ -14,9 +15,16 @@ interface ActionSheetProps {
   visible: boolean;
   onClose: () => void;
   items: ActionSheetItem[];
+  // Slot tùy chỉnh phía trên list item — dùng cho dãy icon reaction trên màn Conversation.
+  header?: ReactNode;
 }
 
-export function ActionSheet({ visible, onClose, items }: ActionSheetProps) {
+export function ActionSheet({
+  visible,
+  onClose,
+  items,
+  header,
+}: ActionSheetProps) {
   const insets = useSafeAreaInsets();
 
   return (
@@ -31,6 +39,7 @@ export function ActionSheet({ visible, onClose, items }: ActionSheetProps) {
           style={{ paddingBottom: insets.bottom + 8 }}
           className="absolute bottom-0 w-full rounded-t-2xl bg-white dark:bg-zinc-900"
         >
+          {header}
           {items.map((item) => (
             <Pressable
               key={item.key}
