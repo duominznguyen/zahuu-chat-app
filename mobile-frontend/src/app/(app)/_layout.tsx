@@ -1,6 +1,11 @@
 import { Stack } from "expo-router";
 
-// Placeholder tối thiểu — M4 (App shell) sẽ thay bằng bottom tabs thật.
+import { SocketProvider } from "@/providers/socket-provider";
+
 export default function AppLayout() {
-  return <Stack screenOptions={{ headerShown: false }} />;
+  return (
+    <SocketProvider>
+      <Stack screenOptions={{ headerShown: false }} />
+    </SocketProvider>
+  );
 }
