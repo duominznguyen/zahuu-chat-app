@@ -53,6 +53,29 @@ export function sendTextMessage(
   });
 }
 
+interface SendMediaOptions {
+  mediaName?: string;
+  mediaSize?: number;
+  replyToId?: string;
+}
+
+export function sendMediaMessage(
+  conversationId: string,
+  type: "IMAGE" | "VIDEO" | "FILE",
+  mediaUrl: string,
+  mediaPublicId: string,
+  options?: SendMediaOptions,
+) {
+  return apiClient.post<Message>(`/conversations/${conversationId}/messages`, {
+    type,
+    mediaUrl,
+    mediaPublicId,
+    mediaName: options?.mediaName,
+    mediaSize: options?.mediaSize,
+    replyToId: options?.replyToId,
+  });
+}
+
 export function recallMessage(messageId: string) {
   return apiClient.patch(`/messages/${messageId}/recall`);
 }

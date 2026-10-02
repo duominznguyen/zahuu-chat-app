@@ -1,5 +1,7 @@
 import * as Clipboard from "expo-clipboard";
-import { useLocalSearchParams } from "expo-router";
+import * as DocumentPicker from "expo-document-picker";
+import * as ImagePicker from "expo-image-picker";
+import { useLocalSearchParams, useRouter } from "expo-router";
 import type { InfiniteData } from "@tanstack/react-query";
 import {
   useInfiniteQuery,
@@ -39,12 +41,14 @@ import {
   markRead,
   recallMessage,
   removeReaction,
+  sendMediaMessage,
   sendTextMessage,
   setReaction,
   type Message,
   type MessagesPage,
   type ReactionType,
 } from "@/lib/messages";
+import { downloadAndShare, uploadMedia } from "@/lib/media";
 import { useSocket } from "@/providers/socket-provider";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -150,6 +154,7 @@ function prependMessage(
 
 export default function Conversation() {
   const { id } = useLocalSearchParams<{ id: string }>();
+  const router = useRouter();
   const socket = useSocket();
   const queryClient = useQueryClient();
   const toast = useToast();
@@ -157,6 +162,11 @@ export default function Conversation() {
 
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
   const [menuTarget, setMenuTarget] = useState<Message | null>(null);
+  const [attachSheetOpen, setAttachSheetOpen] = useState(false);
+  const [uploadState, setUploadState] = useState<{
+    label: string;
+    progress: number;
+  } | null>(null);
   const lastMarkedReadId = useRef<string | null>(null);
 
   const detailQuery = useQuery({
@@ -276,6 +286,86 @@ export default function Conversation() {
   const recallMutation = useMutation({
     mutationFn: (messageId: string) => recallMessage(messageId),
   });
+
+  const handlePickImageVideo = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      toast.show("Cần quyền truy cập thư viện ảnh để gửi");
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ["images", "videos"],
+      quality: 0.8,
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    const isVideo = asset.type === "video";
+    await uploadAndSend({
+      uri: asset.uri,
+      // Tên chỉ để hiển thị/làm field name trong multipart form — tính duy
+      // nhất thật sự do Cloudinary tự sinh UUID ở server, không cần ở đây.
+      name: asset.fileName ?? (isVideo ? "video.mp4" : "image.jpg"),
+      mimeType: asset.mimeType ?? (isVideo ? "video/mp4" : "image/jpeg"),
+      messageType: isVideo ? "VIDEO" : "IMAGE",
+    });
+  };
+
+  const handlePickFile = async () => {
+    const result = await DocumentPicker.getDocumentAsync({
+      type: [
+        "application/pdf",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "application/zip",
+      ],
+    });
+    if (result.canceled || !result.assets[0]) return;
+    const asset = result.assets[0];
+    await uploadAndSend({
+      uri: asset.uri,
+      name: asset.name,
+      mimeType: asset.mimeType ?? "application/octet-stream",
+      messageType: "FILE",
+    });
+  };
+
+  const uploadAndSend = async (file: {
+    uri: string;
+    name: string;
+    mimeType: string;
+    messageType: "IMAGE" | "VIDEO" | "FILE";
+  }) => {
+    setUploadState({ label: file.name, progress: 0 });
+    try {
+      const uploaded = await uploadMedia(file, "MESSAGE", (progress) =>
+        setUploadState({ label: file.name, progress }),
+      );
+      await sendMediaMessage(
+        id,
+        file.messageType,
+        uploaded.url,
+        uploaded.publicId,
+        file.messageType === "FILE"
+          ? { mediaName: uploaded.originalName, mediaSize: uploaded.bytes }
+          : undefined,
+      );
+    } catch (e) {
+      toast.show(
+        e instanceof Error ? e.message : "Gửi thất bại, vui lòng thử lại",
+      );
+    } finally {
+      setUploadState(null);
+    }
+  };
+
+  const handleOpenFile = async (url: string) => {
+    try {
+      await downloadAndShare(url);
+    } catch {
+      toast.show("Mở file thất bại, vui lòng thử lại");
+    }
+  };
 
   const deleteMutation = useMutation({
     mutationFn: (messageId: string) => deleteMessageForMe(messageId),
@@ -417,6 +507,19 @@ export default function Conversation() {
                   senderAvatarUrl={item.sender.avatarUrl}
                   showAvatar={showAvatar}
                   onLongPress={() => setMenuTarget(item)}
+                  onPress={
+                    item.mediaUrl
+                      ? item.type === "IMAGE" || item.type === "VIDEO"
+                        ? () =>
+                            router.push({
+                              pathname: "/media-viewer",
+                              params: { url: item.mediaUrl!, type: item.type },
+                            })
+                        : item.type === "FILE"
+                          ? () => handleOpenFile(item.mediaUrl!)
+                          : undefined
+                      : undefined
+                  }
                   message={{
                     id: item.id,
                     type: item.type,
@@ -447,6 +550,23 @@ export default function Conversation() {
         />
       )}
 
+      {uploadState && (
+        <View className="border-t border-zinc-200 bg-zinc-50 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900">
+          <Text
+            numberOfLines={1}
+            className="text-sm text-zinc-500 dark:text-zinc-400"
+          >
+            Đang gửi {uploadState.label}... {uploadState.progress}%
+          </Text>
+          <View className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-zinc-200 dark:bg-zinc-700">
+            <View
+              className="h-full rounded-full bg-primary dark:bg-primary-dark"
+              style={{ width: `${uploadState.progress}%` }}
+            />
+          </View>
+        </View>
+      )}
+
       {replyTarget && (
         <View className="flex-row items-center justify-between border-t border-zinc-200 bg-zinc-50 px-4 py-2 dark:border-zinc-800 dark:bg-zinc-900">
           <Text
@@ -466,7 +586,26 @@ export default function Conversation() {
 
       <ChatInput
         onSend={(text) => sendMutation.mutate(text)}
-        onAttach={() => toast.show("Gửi ảnh/file sẽ có ở milestone sau")}
+        onAttach={() => setAttachSheetOpen(true)}
+      />
+
+      <ActionSheet
+        visible={attachSheetOpen}
+        onClose={() => setAttachSheetOpen(false)}
+        items={[
+          {
+            key: "media",
+            label: "Ảnh/Video",
+            icon: "image-outline",
+            onPress: handlePickImageVideo,
+          },
+          {
+            key: "file",
+            label: "File",
+            icon: "document-outline",
+            onPress: handlePickFile,
+          },
+        ]}
       />
 
       <ActionSheet
