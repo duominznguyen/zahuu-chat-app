@@ -12,9 +12,9 @@ import {
   confirm,
   useToast,
 } from "@/components/ui";
+import { createDirectConversation } from "@/lib/conversations";
 import {
   blockUser,
-  createDirectConversation,
   getUserProfile,
   sendFriendRequest,
   unblockUser,
@@ -85,8 +85,8 @@ export default function UserProfile() {
 
   const messageMutation = useMutation({
     mutationFn: () => createDirectConversation(id),
-    onSuccess: () => {
-      toast.show("Đã tạo cuộc trò chuyện — màn chat sẽ có ở milestone sau");
+    onSuccess: (conv) => {
+      router.push(`/conversation/${conv.id}`);
     },
   });
 

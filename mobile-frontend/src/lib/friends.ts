@@ -99,7 +99,3 @@ export interface UserProfile extends PublicUser {
 export function getUserProfile(userId: string) {
   return apiClient.get<UserProfile>(`/users/${userId}`);
 }
-
-export function createDirectConversation(friendId: string) {
-  return apiClient.post<{ id: string }>("/conversations/direct", { friendId });
-}
