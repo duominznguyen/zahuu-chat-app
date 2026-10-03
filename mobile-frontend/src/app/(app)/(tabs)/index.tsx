@@ -1,4 +1,5 @@
 import { Ionicons } from "@expo/vector-icons";
+import type { InfiniteData } from "@tanstack/react-query";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
@@ -15,6 +16,7 @@ import {
 } from "@/components/ui";
 import {
   listConversations,
+  type ConversationsPage,
   type ConversationSummary,
 } from "@/lib/conversations";
 import { formatRelativeTime } from "@/lib/format-time";
@@ -38,9 +40,27 @@ function previewText(c: ConversationSummary, myId: string | undefined) {
   return `${prefix}${c.lastMessage.content ?? ""}`;
 }
 
-// M9 (Realtime polish) sẽ thêm chấm online cho conversation DIRECT — backend
-// chưa expose trạng thái online lúc load trang đầu (chỉ có qua socket), nên
-// chưa làm ở milestone này để tránh hiện sai trạng thái lúc mới mở app.
+type ConversationsCache = InfiniteData<ConversationsPage, string | undefined>;
+
+function patchOnlineStatus(
+  data: ConversationsCache | undefined,
+  userId: string,
+  isOnline: boolean,
+): ConversationsCache | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      items: page.items.map((c) =>
+        c.otherUser?.id === userId
+          ? { ...c, otherUser: { ...c.otherUser, isOnline } }
+          : c,
+      ),
+    })),
+  };
+}
+
 export default function ChatsTab() {
   const router = useRouter();
   const queryClient = useQueryClient();
@@ -69,12 +89,28 @@ export default function ChatsTab() {
     socket.on("group:memberAdded", refetch);
     socket.on("group:memberRemoved", refetch);
     socket.on("group:updated", refetch);
+
+    const onPresence = ({
+      userId,
+      isOnline,
+    }: {
+      userId: string;
+      isOnline: boolean;
+    }) => {
+      queryClient.setQueryData<ConversationsCache>(
+        ["conversations", "list"],
+        (old) => patchOnlineStatus(old, userId, isOnline),
+      );
+    };
+    socket.on("presence:update", onPresence);
+
     return () => {
       socket.off("message:new", refetch);
       socket.off("message:recalled", refetch);
       socket.off("group:memberAdded", refetch);
       socket.off("group:memberRemoved", refetch);
       socket.off("group:updated", refetch);
+      socket.off("presence:update", onPresence);
     };
   }, [socket, queryClient]);
 
@@ -104,7 +140,13 @@ export default function ChatsTab() {
           }}
           renderItem={({ item }) => (
             <ListRow
-              leading={<Avatar name={item.name ?? "?"} uri={item.avatarUrl} />}
+              leading={
+                <Avatar
+                  name={item.name ?? "?"}
+                  uri={item.avatarUrl}
+                  online={item.otherUser?.isOnline}
+                />
+              }
               title={item.name ?? "Người dùng đã xóa"}
               titleClassName={item.unread ? "font-semibold" : undefined}
               subtitle={previewText(item, myId)}

@@ -72,6 +72,7 @@ const REACTION_EMOJI: Record<ReactionType, string> = {
   sad: "😢",
   angry: "😠",
 };
+const TYPING_EXPIRE_MS = 5000;
 
 type MessagesCache = InfiniteData<MessagesPage, string | undefined>;
 
@@ -141,6 +142,15 @@ function removeMessageFromCache(
   };
 }
 
+// Nhóm tối đa 2 tên rồi gộp phần còn lại thành "và N người khác" — đủ dùng cho
+// MVP, không cần liệt kê hết khi nhóm đông người đang gõ cùng lúc.
+function typingLabel(isDirect: boolean, names: string[]): string {
+  if (isDirect) return "Đang nhập...";
+  if (names.length === 1) return `${names[0]} đang nhập...`;
+  if (names.length === 2) return `${names[0]}, ${names[1]} đang nhập...`;
+  return `${names[0]} và ${names.length - 1} người khác đang nhập...`;
+}
+
 function prependMessage(
   data: MessagesCache | undefined,
   message: Message,
@@ -179,6 +189,12 @@ export default function Conversation() {
     progress: number;
   } | null>(null);
   const lastMarkedReadId = useRef<string | null>(null);
+  const [typingUserIds, setTypingUserIds] = useState<string[]>([]);
+  // Dự phòng khi message:stopTyping bị mất (vd app đối phương crash giữa lúc
+  // gõ) — tự hết "đang nhập" sau 1 khoảng thời gian không nhận thêm sự kiện.
+  const typingTimeouts = useRef<Map<string, ReturnType<typeof setTimeout>>>(
+    new Map(),
+  );
 
   const detailQuery = useQuery({
     queryKey: ["conversations", "detail", id],
@@ -211,6 +227,7 @@ export default function Conversation() {
   useEffect(() => {
     if (!socket) return;
     socket.emit("conversation:join", { conversationId: id });
+    const timeouts = typingTimeouts.current;
 
     const onNew = (message: Message) => {
       if (message.conversationId !== id) return;
@@ -271,6 +288,61 @@ export default function Conversation() {
       );
     };
 
+    const onTyping = ({
+      conversationId,
+      userId,
+    }: {
+      conversationId: string;
+      userId: string;
+    }) => {
+      if (conversationId !== id || userId === myId) return;
+      const existing = timeouts.get(userId);
+      if (existing) clearTimeout(existing);
+      timeouts.set(
+        userId,
+        setTimeout(() => {
+          timeouts.delete(userId);
+          setTypingUserIds((ids) => ids.filter((i) => i !== userId));
+        }, TYPING_EXPIRE_MS),
+      );
+      setTypingUserIds((ids) => (ids.includes(userId) ? ids : [...ids, userId]));
+    };
+    const onStopTyping = ({
+      conversationId,
+      userId,
+    }: {
+      conversationId: string;
+      userId: string;
+    }) => {
+      if (conversationId !== id) return;
+      const existing = timeouts.get(userId);
+      if (existing) {
+        clearTimeout(existing);
+        timeouts.delete(userId);
+      }
+      setTypingUserIds((ids) => ids.filter((i) => i !== userId));
+    };
+    const onPresence = ({
+      userId,
+      isOnline,
+    }: {
+      userId: string;
+      isOnline: boolean;
+    }) => {
+      queryClient.setQueryData<ConversationDetail>(
+        ["conversations", "detail", id],
+        (old) => {
+          if (!old || !old.members.some((m) => m.id === userId)) return old;
+          return {
+            ...old,
+            members: old.members.map((m) =>
+              m.id === userId ? { ...m, isOnline } : m,
+            ),
+          };
+        },
+      );
+    };
+
     const onGroupUpdated = ({ conversationId }: { conversationId: string }) => {
       if (conversationId !== id) return;
       queryClient.invalidateQueries({
@@ -301,6 +373,9 @@ export default function Conversation() {
     socket.on("message:recalled", onRecalled);
     socket.on("message:reaction", onReaction);
     socket.on("message:read", onRead);
+    socket.on("message:typing", onTyping);
+    socket.on("message:stopTyping", onStopTyping);
+    socket.on("presence:update", onPresence);
     socket.on("group:updated", onGroupUpdated);
     socket.on("group:memberAdded", onGroupUpdated);
     socket.on("group:memberRemoved", onMemberRemoved);
@@ -309,9 +384,17 @@ export default function Conversation() {
       socket.off("message:recalled", onRecalled);
       socket.off("message:reaction", onReaction);
       socket.off("message:read", onRead);
+      socket.off("message:typing", onTyping);
+      socket.off("message:stopTyping", onStopTyping);
+      socket.off("presence:update", onPresence);
       socket.off("group:updated", onGroupUpdated);
       socket.off("group:memberAdded", onGroupUpdated);
       socket.off("group:memberRemoved", onMemberRemoved);
+      // Rời màn lúc đang gõ -> báo đối phương ngừng ngay, không chờ hết 5s dự phòng.
+      socket.emit("message:stopTyping", { conversationId: id });
+      for (const t of timeouts.values()) clearTimeout(t);
+      timeouts.clear();
+      setTypingUserIds([]);
     };
     // Không emit conversation:leave khi unmount — socket dùng chung toàn app,
     // rời room sẽ làm tab Tin nhắn mất luôn update real-time của chính room này.
@@ -479,6 +562,14 @@ export default function Conversation() {
     ? detailQuery.data?.members.find((m) => m.id !== myId)
     : undefined;
   const title = detailQuery.data?.name ?? "...";
+  const headerSubtitle =
+    isDirect && otherMember?.isOnline ? "Đang hoạt động" : undefined;
+
+  const typingNames = typingUserIds.map(
+    (uid) =>
+      detailQuery.data?.members.find((m) => m.id === uid)?.displayName ??
+      "Ai đó",
+  );
 
   const myReaction = menuTarget?.reactions.find(
     (r) => r.userId === myId,
@@ -546,6 +637,7 @@ export default function Conversation() {
     >
       <Header
         title={title}
+        subtitle={headerSubtitle}
         onTitlePress={() => router.push(`/conversation-info/${id}`)}
         right={
           <Pressable onPress={() => router.push(`/conversation-info/${id}`)}>
@@ -685,9 +777,22 @@ export default function Conversation() {
         </View>
       )}
 
+      {typingNames.length > 0 && (
+        <View className="border-t border-zinc-200 bg-white px-4 py-1.5 dark:border-zinc-800 dark:bg-zinc-900">
+          <Text className="text-xs text-zinc-400">
+            {typingLabel(isDirect, typingNames)}
+          </Text>
+        </View>
+      )}
+
       <ChatInput
         onSend={(text) => sendMutation.mutate(text)}
         onAttach={() => setAttachSheetOpen(true)}
+        onTypingChange={(isTyping) => {
+          socket?.emit(isTyping ? "message:typing" : "message:stopTyping", {
+            conversationId: id,
+          });
+        }}
       />
 
       <ActionSheet
