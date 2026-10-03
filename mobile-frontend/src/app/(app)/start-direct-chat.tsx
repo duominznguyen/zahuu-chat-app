@@ -1,4 +1,8 @@
-import { useInfiniteQuery, useMutation } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { ActivityIndicator, FlatList, View } from "react-native";
 
@@ -14,6 +18,7 @@ import { listFriends, type FriendItem } from "@/lib/friends";
 
 export default function StartDirectChat() {
   const router = useRouter();
+  const queryClient = useQueryClient();
 
   const friendsQuery = useInfiniteQuery({
     queryKey: ["friends", "list"],
@@ -25,7 +30,12 @@ export default function StartDirectChat() {
 
   const createMutation = useMutation({
     mutationFn: (friendId: string) => createDirectConversation(friendId),
-    onSuccess: (conv) => router.replace(`/conversation/${conv.id}`),
+    onSuccess: (conv) => {
+      // Không chờ socket group:memberAdded round-trip cho chính hành động của
+      // mình — tự invalidate ngay, đơn giản và chắc chắn hơn.
+      queryClient.invalidateQueries({ queryKey: ["conversations", "list"] });
+      router.replace(`/conversation/${conv.id}`);
+    },
   });
 
   return (

@@ -1,5 +1,9 @@
 import { Ionicons } from "@expo/vector-icons";
-import { useInfiniteQuery, useMutation } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useMutation,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
@@ -23,6 +27,7 @@ const MAX_MEMBERS = 250;
 export default function CreateGroup() {
   const router = useRouter();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const [name, setName] = useState("");
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
@@ -38,6 +43,9 @@ export default function CreateGroup() {
     mutationFn: () =>
       createGroupConversation(name.trim(), Array.from(selectedIds)),
     onSuccess: (conv) => {
+      // Không chờ socket group:memberAdded round-trip cho chính hành động của
+      // mình — tự invalidate ngay, đơn giản và chắc chắn hơn.
+      queryClient.invalidateQueries({ queryKey: ["conversations", "list"] });
       router.replace(`/conversation/${conv.id}`);
     },
     onError: (e) => {

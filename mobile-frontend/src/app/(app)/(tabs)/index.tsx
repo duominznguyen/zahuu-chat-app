@@ -1,6 +1,10 @@
 import { Ionicons } from "@expo/vector-icons";
 import type { InfiniteData } from "@tanstack/react-query";
-import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import {
+  useInfiniteQuery,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query";
 import { useRouter } from "expo-router";
 import { useEffect, useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
@@ -9,6 +13,7 @@ import { SafeAreaView } from "react-native-safe-area-context";
 import {
   ActionSheet,
   Avatar,
+  Badge,
   Dot,
   EmptyState,
   ErrorState,
@@ -20,6 +25,7 @@ import {
   type ConversationSummary,
 } from "@/lib/conversations";
 import { formatRelativeTime } from "@/lib/format-time";
+import { listNotifications } from "@/lib/notifications";
 import { useSocket } from "@/providers/socket-provider";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -114,6 +120,54 @@ export default function ChatsTab() {
     };
   }, [socket, queryClient]);
 
+  // Không có endpoint đếm riêng -> khởi tạo bằng cách đếm isRead:false trong
+  // trang đầu GET /notifications, rồi tự cộng/trừ qua socket trong lúc app mở.
+  // Không chính xác tuyệt đối nếu offline lâu rồi online lại (chấp nhận được,
+  // mở màn Notifications sẽ refetch ra số đúng).
+  const unreadCountQuery = useQuery({
+    queryKey: ["notifications", "unreadCount"],
+    queryFn: async () => {
+      const page = await listNotifications();
+      return page.items.filter((n) => !n.isRead).length;
+    },
+  });
+
+  useEffect(() => {
+    if (!socket) return;
+    // Chỉ cộng dồn SỐ ngay (không phụ thuộc fetch nào) — không tự invalidate
+    // danh sách Thông báo tại đây: event socket này tới có thể NHANH HƠN chính
+    // transaction tạo `Notification` DB (2 việc chạy song song, không đồng bộ
+    // với nhau — xem NotificationsService/ChatGateway, cùng lắng nghe 1 event
+    // nhưng độc lập), nên invalidate+refetch ngay lúc này có thể đọc phải dữ
+    // liệu CŨ (đã xảy ra thật khi test). Màn Notifications tự đặt `staleTime: 0`
+    // để luôn fetch mới mỗi lần mở, đó mới là lúc chắc chắn DB đã ghi xong.
+    const bump = () =>
+      queryClient.setQueryData<number>(
+        ["notifications", "unreadCount"],
+        (c) => (c ?? 0) + 1,
+      );
+    // group:memberAdded còn bắn lúc tạo DIRECT/GROUP mới (chỉ để tự join room,
+    // không phải thông báo thật) -> phải lọc đúng theo cờ notify server gửi kèm,
+    // không thể tự suy ra chỉ từ việc member.id trùng mình.
+    const onGroupMemberAdded = ({
+      member,
+      notify,
+    }: {
+      member: { id: string };
+      notify: boolean;
+    }) => {
+      if (notify && member.id === myId) bump();
+    };
+    socket.on("friend:requestReceived", bump);
+    socket.on("friend:accepted", bump);
+    socket.on("group:memberAdded", onGroupMemberAdded);
+    return () => {
+      socket.off("friend:requestReceived", bump);
+      socket.off("friend:accepted", bump);
+      socket.off("group:memberAdded", onGroupMemberAdded);
+    };
+  }, [socket, queryClient, myId]);
+
   const items = query.data?.pages.flatMap((p) => p.items) ?? [];
 
   return (
@@ -122,9 +176,25 @@ export default function ChatsTab() {
         <Text className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
           Tin nhắn
         </Text>
-        <Pressable onPress={() => setNewChatSheetOpen(true)}>
-          <Ionicons name="add-circle-outline" size={28} color="#71717a" />
-        </Pressable>
+        <View className="flex-row items-center gap-4">
+          <Pressable onPress={() => router.push("/notifications")}>
+            <View>
+              <Ionicons
+                name="notifications-outline"
+                size={26}
+                color="#71717a"
+              />
+              {!!unreadCountQuery.data && (
+                <View className="absolute -right-1.5 -top-1.5">
+                  <Badge count={unreadCountQuery.data} />
+                </View>
+              )}
+            </View>
+          </Pressable>
+          <Pressable onPress={() => setNewChatSheetOpen(true)}>
+            <Ionicons name="add-circle-outline" size={28} color="#71717a" />
+          </Pressable>
+        </View>
       </View>
 
       {query.isLoading ? null : query.isError ? (

@@ -6,7 +6,7 @@ import {
   useQueryClient,
 } from "@tanstack/react-query";
 import { useRouter } from "expo-router";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { FlatList, Pressable, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
@@ -27,11 +27,13 @@ import {
   unfriend,
   type FriendItem,
 } from "@/lib/friends";
+import { useSocket } from "@/providers/socket-provider";
 
 export default function FriendsTab() {
   const router = useRouter();
   const toast = useToast();
   const queryClient = useQueryClient();
+  const socket = useSocket();
   const [searchSheetOpen, setSearchSheetOpen] = useState(false);
   const [menuTarget, setMenuTarget] = useState<FriendItem | null>(null);
 
@@ -46,6 +48,23 @@ export default function FriendsTab() {
     queryKey: ["friend-requests", "received"],
     queryFn: () => listFriendRequests("received"),
   });
+
+  useEffect(() => {
+    if (!socket) return;
+    // Người kia chấp nhận/gửi lời mời không tự báo cho cache phía mình —
+    // thiếu bước này thì danh sách bạn bè/badge lời mời chỉ đúng lại sau khi
+    // hết staleTime mặc định (30s) hoặc rời màn rồi quay lại.
+    const onAccepted = () =>
+      queryClient.invalidateQueries({ queryKey: ["friends"] });
+    const onRequestReceived = () =>
+      queryClient.invalidateQueries({ queryKey: ["friend-requests"] });
+    socket.on("friend:accepted", onAccepted);
+    socket.on("friend:requestReceived", onRequestReceived);
+    return () => {
+      socket.off("friend:accepted", onAccepted);
+      socket.off("friend:requestReceived", onRequestReceived);
+    };
+  }, [socket, queryClient]);
 
   const unfriendMutation = useMutation({
     mutationFn: (userId: string) => unfriend(userId),
