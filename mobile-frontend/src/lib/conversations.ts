@@ -23,7 +23,7 @@ export interface ConversationSummary {
   unread: boolean;
   role: MemberRole | null;
   memberCount?: number;
-  otherUser?: { id: string; username: string } | null;
+  otherUser?: { id: string; username: string; isOnline: boolean } | null;
 }
 
 export interface ConversationsPage {
@@ -42,6 +42,7 @@ export interface ConversationMember extends PublicUser {
   joinedAt: string;
   lastReadMessageId: string | null;
   lastReadAt: string | null;
+  isOnline: boolean;
 }
 
 export interface ConversationDetail {

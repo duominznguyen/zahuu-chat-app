@@ -18,6 +18,7 @@ import {
   MessageType,
 } from '../generated/prisma/enums.js';
 import type { Prisma } from '../generated/prisma/client.js';
+import { PresenceService } from '../chat/presence.service.js';
 import { MediaPurpose } from '../media/media-purpose.enum.js';
 import { MediaService } from '../media/media.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
@@ -39,6 +40,7 @@ export class ConversationsService {
     private readonly prisma: PrismaService,
     private readonly media: MediaService,
     private readonly events: EventEmitter2,
+    private readonly presence: PresenceService,
   ) {}
 
   async listConversations(userId: string, cursor?: string, limit?: number) {
@@ -98,7 +100,15 @@ export class ConversationsService {
       ]),
     );
 
-    const items = page.map((c) => this.toSummary(c, userId, nicknameMap));
+    // Socket chỉ báo được lúc CHUYỂN trạng thái online/offline, không có cách
+    // nào biết trạng thái HIỆN TẠI lúc mới load trang — phải tự tra Redis.
+    const onlineMap = await this.presence.isOnlineBatch(
+      directTargets.map((t) => t.targetUserId),
+    );
+
+    const items = page.map((c) =>
+      this.toSummary(c, userId, nicknameMap, onlineMap),
+    );
     return { items, nextCursor: hasMore ? page[page.length - 1].id : null };
   }
 
@@ -125,6 +135,9 @@ export class ConversationsService {
     const nicknameMap = new Map(
       conv.nicknames.map((n) => [n.targetUserId, n.nickname]),
     );
+    const onlineMap = await this.presence.isOnlineBatch(
+      conv.members.map((m) => m.userId),
+    );
     const members = conv.members.map((m) => ({
       ...m.user,
       nickname: nicknameMap.get(m.userId) ?? null,
@@ -132,6 +145,7 @@ export class ConversationsService {
       joinedAt: m.joinedAt,
       lastReadMessageId: m.lastReadMessageId,
       lastReadAt: m.lastReadAt,
+      isOnline: onlineMap.get(m.userId) ?? false,
     }));
     const me = conv.members.find((m) => m.userId === viewerId);
 
@@ -733,6 +747,7 @@ export class ConversationsService {
     },
     viewerId: string,
     nicknameMap: Map<string, string>,
+    onlineMap: Map<string, boolean>,
   ) {
     const me = conv.members.find((m) => m.userId === viewerId);
     // Không đếm số tin chưa đọc chính xác (tốn 1 query COUNT/conversation) — chỉ
@@ -778,7 +793,11 @@ export class ConversationsService {
       unread,
       role: me?.role ?? null,
       otherUser: other
-        ? { id: other.user.id, username: other.user.username }
+        ? {
+            id: other.user.id,
+            username: other.user.username,
+            isOnline: onlineMap.get(other.user.id) ?? false,
+          }
         : null,
     };
   }

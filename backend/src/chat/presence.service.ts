@@ -31,4 +31,14 @@ export class PresenceService {
     const count = await this.redis.get(this.key(userId));
     return Number(count ?? 0) > 0;
   }
+
+  // Tra nhiều user cùng lúc bằng 1 round-trip Redis (MGET) — tránh N+1 khi
+  // trả danh sách conversation/member kèm trạng thái online ban đầu.
+  async isOnlineBatch(userIds: string[]): Promise<Map<string, boolean>> {
+    if (userIds.length === 0) return new Map();
+    const counts = await this.redis.mget(userIds.map((id) => this.key(id)));
+    return new Map(
+      userIds.map((id, i) => [id, Number(counts[i] ?? 0) > 0]),
+    );
+  }
 }

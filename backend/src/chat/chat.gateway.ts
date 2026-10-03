@@ -44,6 +44,12 @@ interface FriendAcceptedEvent {
 interface GroupMemberAddedEvent {
   conversationId: string;
   member: { id: string } & Record<string, unknown>;
+  addedById: string | null;
+  // true khi đây thật sự là 1 thông báo GROUP_MEMBER_ADDED (xem NotificationsService) —
+  // event này còn được bắn cho cả lúc tạo DIRECT/GROUP mới (chỉ để tự join room ngay,
+  // không phải "được thêm vào" theo nghĩa cần báo), nên client cần cờ này để biết có
+  // nên tăng badge chuông hay không, không thể tự suy ra chỉ từ addedById.
+  notify: boolean;
 }
 interface GroupMemberRemovedEvent {
   conversationId: string;
@@ -206,14 +212,22 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @OnEvent('group.member.added')
-  async onGroupMemberAdded({ conversationId, member }: GroupMemberAddedEvent) {
-    this.server
-      .to(conversationRoom(conversationId))
-      .emit('group:memberAdded', { conversationId, member });
-    // Thành viên mới có thể đang online từ trước -> cho socket của họ join luôn room,
-    // không phải chờ client tự emit conversation:join
+  async onGroupMemberAdded({
+    conversationId,
+    member,
+    addedById,
+    notify,
+  }: GroupMemberAddedEvent) {
+    // PHẢI join trước rồi mới broadcast — tạo conversation mới emit sự kiện này
+    // lần lượt cho từng thành viên ban đầu (kể cả chính người đó) qua 1 vòng lặp
+    // không await tuần tự, nên lúc phát sự kiện cho chính thành viên X, socket
+    // của X có thể CHƯA join room (room rỗng/thiếu người) nếu broadcast trước
+    // join — khi đó chính X lại không nhận được sự kiện báo "X vừa được thêm".
     const sockets = await this.server.in(userRoom(member.id)).fetchSockets();
     for (const s of sockets) s.join(conversationRoom(conversationId));
+    this.server
+      .to(conversationRoom(conversationId))
+      .emit('group:memberAdded', { conversationId, member, addedById, notify });
   }
 
   @OnEvent('group.member.removed')
