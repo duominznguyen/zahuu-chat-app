@@ -1,4 +1,5 @@
 import { useAuthStore } from "@/store/auth-store";
+import { clearSession } from "./clear-session";
 import { env } from "./env";
 import { tokenStorage } from "./secure-store";
 
@@ -86,8 +87,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
     if (newToken) {
       ({ res, data } = await rawRequest(path, init, newToken));
     } else {
-      await tokenStorage.clear();
-      useAuthStore.getState().clear();
+      await clearSession();
     }
   }
 

@@ -65,3 +65,93 @@ export function createDirectConversation(friendId: string) {
     friendId,
   });
 }
+
+export function createGroupConversation(name: string, memberIds: string[]) {
+  return apiClient.post<ConversationDetail>("/conversations/group", {
+    name,
+    memberIds,
+  });
+}
+
+export function updateConversation(
+  id: string,
+  data: { name?: string; avatarUrl?: string | null },
+) {
+  return apiClient.patch<ConversationDetail>(`/conversations/${id}`, data);
+}
+
+export function updateBackground(id: string, url: string | null) {
+  return apiClient.patch<ConversationDetail>(
+    `/conversations/${id}/background`,
+    { url },
+  );
+}
+
+export function leaveConversation(id: string) {
+  return apiClient.delete(`/conversations/${id}/leave`);
+}
+
+export function disbandConversation(id: string) {
+  return apiClient.delete(`/conversations/${id}`);
+}
+
+export function addMember(id: string, userId: string) {
+  return apiClient.post<ConversationDetail>(`/conversations/${id}/members`, {
+    userId,
+  });
+}
+
+export function removeMember(id: string, userId: string) {
+  return apiClient.delete(`/conversations/${id}/members/${userId}`);
+}
+
+export function updateMemberRole(id: string, userId: string, role: MemberRole) {
+  return apiClient.patch(`/conversations/${id}/members/${userId}/role`, {
+    role,
+  });
+}
+
+export function setNickname(
+  id: string,
+  targetUserId: string,
+  nickname: string,
+) {
+  return apiClient.put<{ targetUserId: string; nickname: string }>(
+    `/conversations/${id}/nicknames/${targetUserId}`,
+    { nickname },
+  );
+}
+
+export interface InviteLink {
+  id: string;
+  token: string;
+  createdAt: string;
+}
+
+export function createInviteLink(id: string) {
+  return apiClient.post<InviteLink>(`/conversations/${id}/invite-links`);
+}
+
+export function listInviteLinks(id: string) {
+  return apiClient.get<InviteLink[]>(`/conversations/${id}/invite-links`);
+}
+
+export function revokeInviteLink(id: string, linkId: string) {
+  return apiClient.patch(`/conversations/${id}/invite-links/${linkId}/revoke`);
+}
+
+export function joinByInviteToken(token: string) {
+  return apiClient.post<ConversationDetail>(`/invite-links/${token}/join`);
+}
+
+export interface InviteLinkPreview {
+  conversationId: string;
+  name: string;
+  avatarUrl: string | null;
+  memberCount: number;
+  alreadyMember: boolean;
+}
+
+export function previewInviteLink(token: string) {
+  return apiClient.get<InviteLinkPreview>(`/invite-links/${token}`);
+}
