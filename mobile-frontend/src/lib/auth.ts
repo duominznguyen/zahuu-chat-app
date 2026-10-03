@@ -1,5 +1,6 @@
 import { useAuthStore, type AuthUser } from "@/store/auth-store";
 import { apiClient } from "./api-client";
+import { clearSession } from "./clear-session";
 import { tokenStorage } from "./secure-store";
 
 interface TokenPair {
@@ -35,8 +36,7 @@ export async function bootstrapAuth() {
     const user = await apiClient.get<AuthUser>("/users/me");
     await persistSession(tokens, user);
   } catch {
-    await tokenStorage.clear();
-    useAuthStore.getState().clear();
+    await clearSession();
   } finally {
     useAuthStore.getState().setReady();
   }
@@ -115,6 +115,5 @@ export async function logout() {
     // Vẫn đăng xuất phía client dù gọi API lỗi (vd mất mạng) — không để người
     // dùng bị kẹt không thoát được tài khoản chỉ vì request logout thất bại.
   }
-  await tokenStorage.clear();
-  useAuthStore.getState().clear();
+  await clearSession();
 }

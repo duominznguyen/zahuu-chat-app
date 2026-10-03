@@ -6,8 +6,8 @@ import {
 } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { JwtService } from '@nestjs/jwt';
-import { hash, verify } from 'argon2';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
+import { hash, verify } from '../common/password-hash.js';
 import { AuthProviderType } from '../generated/prisma/enums.js';
 import { MailService } from '../mail/mail.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';

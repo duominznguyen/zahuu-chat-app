@@ -10,4 +10,5 @@ export * from "./header";
 export * from "./list-row";
 export * from "./message-bubble";
 export * from "./text-field";
+export * from "./text-prompt-modal";
 export * from "./toast";

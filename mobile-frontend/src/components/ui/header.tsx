@@ -8,12 +8,23 @@ interface HeaderProps {
   title: string;
   right?: ReactNode;
   onBack?: () => void;
+  // Vd mở ConversationInfo khi bấm vào tên/avatar cuộc trò chuyện.
+  onTitlePress?: () => void;
 }
 
-export function Header({ title, right, onBack }: HeaderProps) {
+export function Header({ title, right, onBack, onTitlePress }: HeaderProps) {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const isDark = useColorScheme() === "dark";
+
+  const titleText = (
+    <Text
+      numberOfLines={1}
+      className="flex-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100"
+    >
+      {title}
+    </Text>
+  );
 
   return (
     <View
@@ -30,12 +41,13 @@ export function Header({ title, right, onBack }: HeaderProps) {
           color={isDark ? "#f4f4f5" : "#18181b"}
         />
       </Pressable>
-      <Text
-        numberOfLines={1}
-        className="flex-1 text-lg font-semibold text-zinc-900 dark:text-zinc-100"
-      >
-        {title}
-      </Text>
+      {onTitlePress ? (
+        <Pressable className="flex-1" onPress={onTitlePress}>
+          {titleText}
+        </Pressable>
+      ) : (
+        titleText
+      )}
       <View className="min-w-12 flex-row items-center justify-end pr-2">
         {right}
       </View>

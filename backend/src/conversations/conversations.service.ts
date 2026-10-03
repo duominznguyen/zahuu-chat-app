@@ -541,6 +541,39 @@ export class ConversationsService {
     if (count === 0) throw new NotFoundException('Không tìm thấy link mời');
   }
 
+  // Xem trước nhóm trước khi join — không tạo membership, chỉ đọc. Cho phép
+  // client hiện màn xác nhận (kiểu Zalo) thay vì join thẳng ngay khi bấm link,
+  // và tự biết có nên hiện nút "Tham gia" hay vào thẳng luôn nếu đã là thành viên.
+  async previewInviteLink(userId: string, token: string) {
+    await assertCallerActive(this.prisma, userId);
+
+    const link = await this.prisma.groupInviteLink.findUnique({
+      where: { token },
+      select: {
+        revoked: true,
+        conversation: {
+          select: {
+            id: true,
+            name: true,
+            avatarUrl: true,
+            members: { select: { userId: true } },
+          },
+        },
+      },
+    });
+    if (!link || link.revoked) {
+      throw new NotFoundException('Link mời không hợp lệ hoặc đã bị thu hồi');
+    }
+
+    return {
+      conversationId: link.conversation.id,
+      name: link.conversation.name,
+      avatarUrl: link.conversation.avatarUrl,
+      memberCount: link.conversation.members.length,
+      alreadyMember: link.conversation.members.some((m) => m.userId === userId),
+    };
+  }
+
   async joinByToken(userId: string, token: string) {
     await assertCallerActive(this.prisma, userId);
 
