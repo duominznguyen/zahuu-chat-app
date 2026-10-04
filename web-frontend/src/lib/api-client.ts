@@ -1,4 +1,6 @@
+import { clearSession } from "./clear-session";
 import { env } from "./env";
+import { refreshSession } from "./token-refresh";
 
 export class ApiError extends Error {
   status: number;
@@ -20,10 +22,7 @@ function safeParseJson(text: string): unknown {
   }
 }
 
-// TODO (W3): bắt 401 → gọi POST /auth/refresh (1 Promise dùng chung cho nhiều
-// request 401 cùng lúc, khoá cross-tab qua Web Locks API) → retry request gốc
-// đúng 1 lần, xem docs/web-frontend-docs/web-frontend-plan.md mục 5.
-async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+async function rawRequest(path: string, init: RequestInit = {}) {
   const res = await fetch(`${env.apiUrl}${path}`, {
     ...init,
     credentials: "include", // cookie accessToken/refreshToken tự gửi kèm, không tự gắn header Authorization
@@ -34,6 +33,25 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   });
   const text = await res.text();
   const data = text ? safeParseJson(text) : undefined;
+  return { res, data };
+}
+
+// 401 ở các route này là lỗi nghiệp vụ thật (sai mật khẩu, refresh token hết
+// hạn...), không phải access token hết hạn — thử refresh lại sẽ gây vòng lặp
+// hoặc che mất lỗi thật.
+const NO_REFRESH_RETRY_PATHS = new Set(["/auth/login", "/auth/refresh", "/auth/google"]);
+
+async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
+  let { res, data } = await rawRequest(path, init);
+
+  if (res.status === 401 && !NO_REFRESH_RETRY_PATHS.has(path)) {
+    const refreshed = await refreshSession();
+    if (refreshed) {
+      ({ res, data } = await rawRequest(path, init));
+    } else {
+      clearSession();
+    }
+  }
 
   if (!res.ok) {
     const message =
