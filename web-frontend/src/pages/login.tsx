@@ -4,6 +4,8 @@ import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { FormField } from "@/components/form-field";
+import { GoogleSignInButton } from "@/components/google-sign-in-button";
+import { OrDivider } from "@/components/or-divider";
 import { ApiError } from "@/lib/api-client";
 import { login } from "@/lib/auth";
 import { useRedirectTarget } from "@/lib/use-redirect-target";
@@ -71,6 +73,10 @@ export default function Login() {
           {mutation.isPending && <Loader2 className="animate-spin" />}
           Đăng nhập
         </Button>
+
+        <OrDivider />
+
+        <GoogleSignInButton />
 
         <p className="text-center text-sm text-muted-foreground">
           Chưa có tài khoản?{" "}
