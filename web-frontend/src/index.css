@@ -1,0 +1,128 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+
+/* dark mode bật qua class .dark trên <html> (giống darkMode: 'class' của mobile),
+   không dùng media query prefers-color-scheme làm nguồn chính vì cần hỗ trợ
+   toggle thủ công (Sáng/Tối/Theo hệ thống) ở màn Cài đặt — xem src/lib/theme.ts */
+@custom-variant dark (&:where(.dark, .dark *));
+
+/* Giá trị port nguyên từ mobile-frontend/tailwind.config.js để giữ đồng nhất
+   thương hiệu 2 nền tảng. Khai báo qua CSS variable (Tailwind v4 @theme) nên
+   bg-primary/text-primary/... TỰ đổi giá trị khi ở trong .dark, không cần viết
+   cặp class kiểu "bg-primary dark:bg-primary-dark" như mobile phải làm (đó là
+   workaround riêng cho NativeWind, không áp dụng ở đây — web dùng CSS variable
+   thật, không có giới hạn tương tự).
+   --color-destructive alias thẳng sang --color-danger (KHÔNG khai riêng ở
+   @theme inline bên dưới) để shadcn Button/... dùng đúng màu brand mà không
+   tạo tham chiếu vòng — đây CHÍNH LÀ bug thật đã gặp lúc setup: @theme inline
+   (do shadcn CLI generate) có "--color-primary: var(--primary)", còn :root
+   lại có "--primary: var(--color-primary)" → 2 biến trỏ vòng vào nhau → trình
+   duyệt coi là invalid → text-primary rơi về màu kế thừa (zinc) ở light mode
+   (dark mode "tình cờ" đúng vì .dark khai --color-primary trực tiếp, thắng
+   nhờ là unlayered). Giữ --color-primary/--color-destructive CHỈ khai 1 nơi
+   duy nhất ở đây để không lặp lại lỗi này. */
+@theme {
+  --color-primary: #0d9488;
+  --color-danger: #dc2626;
+  --color-warning: #d97706;
+  --color-success: #16a34a;
+  --color-destructive: var(--color-danger);
+}
+
+/* Token ngữ nghĩa riêng của shadcn (background/foreground/card/popover/
+   secondary/muted/accent/border/input/ring + primary-foreground) — khai giá
+   trị thật ở :root/.dark bên dưới, dòng này chỉ "bơm" chúng vào theme namespace
+   của Tailwind (--color-X) để sinh ra được các utility bg-X/text-X tương ứng. */
+@theme inline {
+  --font-heading: var(--font-sans);
+  --font-sans: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-foreground: var(--foreground);
+  --color-background: var(--background);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* :root PHẢI đứng TRƯỚC .dark trong file — cả 2 cùng specificity (1 class),
+   không nằm trong layer nào, nên theo đúng thứ tự nguồn, rule khai SAU thắng.
+   Khai .dark trước :root (như bản đầu tiên lúc setup) là bug thật đã gặp:
+   mọi token không trùng tên giữa 2 block (background/border/secondary/...)
+   bị :root (đứng sau) ghi đè ngược lại dù .dark đang active — chỉ riêng
+   primary/destructive "tình cờ" không lộ bug này lúc đó nhờ lý do khác (xem
+   ghi chú ở @theme phía trên), khiến dễ tưởng toggle dark hoạt động đúng. */
+:root {
+  --background: #ffffff;
+  --foreground: #18181b; /* zinc-900 */
+  --card: #ffffff;
+  --card-foreground: #18181b;
+  --popover: #ffffff;
+  --popover-foreground: #18181b;
+  --primary: var(--color-primary);
+  --primary-foreground: #ffffff;
+  --secondary: #f4f4f5; /* zinc-100 */
+  --secondary-foreground: #18181b;
+  --muted: #f4f4f5;
+  --muted-foreground: #71717a; /* zinc-500 */
+  --accent: #f4f4f5;
+  --accent-foreground: #18181b;
+  --border: #e4e4e7; /* zinc-200 */
+  --input: #e4e4e7;
+  --ring: var(--color-primary);
+  --radius: 0.625rem;
+}
+
+.dark {
+  --color-primary: #2dd4bf;
+  --color-danger: #f87171;
+  --color-warning: #fbbf24;
+  --color-success: #4ade80;
+
+  --background: #09090b; /* zinc-950 */
+  --foreground: #fafafa; /* zinc-50 */
+  --card: #18181b; /* zinc-900 */
+  --card-foreground: #fafafa;
+  --popover: #18181b;
+  --popover-foreground: #fafafa;
+  --primary: var(--color-primary);
+  --primary-foreground: #18181b; /* chữ tối trên primary-dark (teal sáng), không phải trắng */
+  --secondary: #27272a; /* zinc-800 */
+  --secondary-foreground: #fafafa;
+  --muted: #27272a;
+  --muted-foreground: #a1a1aa; /* zinc-400 */
+  --accent: #27272a;
+  --accent-foreground: #fafafa;
+  --border: #27272a;
+  --input: #27272a;
+  --ring: var(--color-primary);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+  html {
+    @apply font-sans;
+  }
+}
