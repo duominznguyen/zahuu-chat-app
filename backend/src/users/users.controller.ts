@@ -9,7 +9,10 @@ import {
   Query,
   Param,
   ParseUUIDPipe,
+  Res,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import type { Response } from 'express';
 import {
   CurrentUser,
   type AuthUser,
@@ -22,12 +25,17 @@ import { AuthService } from '../auth/auth.service.js';
 import { ChangePasswordDto } from './dto/change-password.dto.js';
 import { DeactivateAccountDto } from './dto/deactivate-account.dto.js';
 import { SearchUsersDto } from './dto/search-users.dto.js';
+import {
+  clearSessionCookies,
+  setSessionCookies,
+} from '../auth/utils/session-cookie.util.js';
 
 @Controller('users')
 export class UsersController {
   constructor(
     private readonly usersService: UsersService,
     private readonly authService: AuthService,
+    private readonly config: ConfigService,
   ) {}
 
   @Get('me')
@@ -56,18 +64,26 @@ export class UsersController {
   }
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Patch('me/password')
-  changePassword(
+  async changePassword(
     @CurrentUser() user: AuthUser,
     @Body() dto: ChangePasswordDto,
+    @Res({ passthrough: true }) res: Response,
   ) {
-    return this.authService.changePassword(user.id, dto);
+    const result = await this.authService.changePassword(user.id, dto);
+    setSessionCookies(res, result, this.config);
+    return result;
   }
 
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(HttpStatus.NO_CONTENT)
   @Delete('me')
-  deactivate(@CurrentUser() user: AuthUser, @Body() dto: DeactivateAccountDto) {
-    return this.authService.deactivateAccount(user.id, dto);
+  async deactivate(
+    @CurrentUser() user: AuthUser,
+    @Body() dto: DeactivateAccountDto,
+    @Res({ passthrough: true }) res: Response,
+  ) {
+    await this.authService.deactivateAccount(user.id, dto);
+    clearSessionCookies(res, this.config);
   }
 
   @Get(':id')

@@ -1,6 +1,7 @@
 import { Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { OnEvent } from '@nestjs/event-emitter';
+import { parseCookie } from 'cookie';
 import {
   ConnectedSocket,
   MessageBody,
@@ -66,7 +67,27 @@ const conversationRoom = (conversationId: string) =>
 
 // Gateway DUY NHẤT cho toàn bộ app — không tách gateway theo module. Chỉ broadcast
 // kết quả đã xử lý xong qua REST/EventEmitter2, không chứa business logic ở đây.
-@WebSocketGateway({ cors: { origin: '*' } })
+//
+// cors.origin PHẢI là allowlist cụ thể + credentials:true (không phải '*') để
+// trình duyệt web chịu đính kèm cookie accessToken vào handshake — CORS credentialed
+// request bị chặn với wildcard origin (bug thật đã gặp lúc thêm cookie-based auth
+// cho web: socket.io-client báo "xhr poll error", browser tự chặn trước khi tới
+// được server). Đọc process.env trực tiếp (không qua ConfigService) vì decorator
+// evaluate lúc class được load — không đảm bảo ConfigModule đã nạp .env trước đó;
+// dùng dạng HÀM để chỉ đọc lúc có connection thật, lúc đó app chắc chắn đã bootstrap
+// xong. origin rỗng (mobile/native client không gửi header Origin) luôn được chấp nhận.
+@WebSocketGateway({
+  cors: {
+    origin: (origin, callback) => {
+      if (!origin) return callback(null, true);
+      const allowed = (process.env.CORS_ORIGINS ?? '')
+        .split(',')
+        .map((s) => s.trim());
+      callback(null, allowed.includes(origin));
+    },
+    credentials: true,
+  },
+})
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer() server!: Server;
 
@@ -79,7 +100,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   ) {}
 
   async handleConnection(client: Socket) {
-    const token = client.handshake.auth?.token as string | undefined;
+    // Mobile gửi qua handshake.auth.token như cũ — nhánh dưới chỉ kích hoạt
+    // khi KHÔNG có giá trị đó, tức chỉ web (dựa vào cookie accessToken) mới rơi vào.
+    let token = client.handshake.auth?.token as string | undefined;
+    if (!token) {
+      const cookies = parseCookie(client.handshake.headers.cookie ?? '');
+      token = cookies.accessToken;
+    }
     let userId: string;
     try {
       if (!token) throw new Error('missing token');
