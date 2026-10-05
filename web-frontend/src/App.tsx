@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, type Location } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AppShellLayout } from "@/components/app-shell/app-shell-layout";
+import { ConfirmDialogHost } from "@/components/confirm-dialog-host";
 import { ProtectedRoute } from "@/components/protected-route";
 import { PublicOnlyRoute } from "@/components/public-only-route";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -14,7 +15,7 @@ import { useAuthStore } from "@/store/auth-store";
 import ChatEmpty from "@/pages/chat-empty";
 import ConversationPlaceholder from "@/pages/conversation-placeholder";
 import ForgotPassword from "@/pages/forgot-password";
-import FriendProfilePlaceholder from "@/pages/friend-profile-placeholder";
+import FriendProfile from "@/pages/friend-profile";
 import FriendsEmpty from "@/pages/friends-empty";
 import Login from "@/pages/login";
 import Register from "@/pages/register";
@@ -118,7 +119,7 @@ function AppRoutes() {
           <Route path="/chat" element={<ChatEmpty />} />
           <Route path="/chat/:conversationId" element={<ConversationPlaceholder />} />
           <Route path="/friends" element={<FriendsEmpty />} />
-          <Route path="/friends/:userId" element={<FriendProfilePlaceholder />} />
+          <Route path="/friends/:userId" element={<FriendProfile />} />
         </Route>
 
         {/* Bản độc lập — chỉ render khi KHÔNG có background (vào thẳng URL) */}
@@ -149,6 +150,7 @@ function App() {
         </BrowserRouter>
       </TooltipProvider>
       <Toaster richColors position="top-center" />
+      <ConfirmDialogHost />
     </QueryClientProvider>
   );
 }

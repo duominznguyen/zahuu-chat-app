@@ -1,9 +1,10 @@
 import { useNavigate, useParams } from "react-router-dom";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { UserProfileContent } from "@/components/user-profile-content";
 
 export default function UserProfileModal() {
   const navigate = useNavigate();
-  const { userId } = useParams();
+  const { userId } = useParams<{ userId: string }>();
 
   return (
     <Dialog
@@ -12,13 +13,11 @@ export default function UserProfileModal() {
         if (!open) navigate(-1);
       }}
     >
-      <DialogContent>
+      <DialogContent className="max-h-[80vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Hồ sơ người dùng</DialogTitle>
         </DialogHeader>
-        <p className="text-sm text-muted-foreground">
-          Xem hồ sơ user {userId} — nội dung thật sẽ làm ở W5.
-        </p>
+        {userId && <UserProfileContent userId={userId} />}
       </DialogContent>
     </Dialog>
   );
