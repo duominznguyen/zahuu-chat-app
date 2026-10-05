@@ -5,6 +5,7 @@ import {
   LiveKitRoom,
   ParticipantTile,
   RoomAudioRenderer,
+  useParticipants,
   useTracks,
 } from "@livekit/components-react";
 import { Track } from "livekit-client";
@@ -15,6 +16,15 @@ import type { ActiveCall } from "@/store/call-store";
 interface CallRoomProps {
   call: ActiveCall;
   onDisconnected: () => void;
+  nameOf: (userId: string) => string;
+}
+
+// LiveKit identity = userId của server (xem livekit.service.ts), nên ánh xạ ngược được
+// sang tên thành viên để hiện danh sách đang trong cuộc gọi.
+function ParticipantNames({ nameOf }: { nameOf: (userId: string) => string }) {
+  const participants = useParticipants();
+  const names = participants.map((p) => nameOf(p.identity));
+  return <p className="px-6 py-2 text-xs text-white/70">Trong cuộc gọi: {names.join(", ")}</p>;
 }
 
 function CallTiles() {
@@ -30,7 +40,7 @@ function CallTiles() {
 
 // Dùng LiveKit components có sẵn thay vì tự dựng WebRTC: layout lưới tự co theo số
 // người (1-1 là 2 khung), control bar chỉ giữ mic/camera/rời — chia sẻ màn hình để sau.
-export function CallRoom({ call, onDisconnected }: CallRoomProps) {
+export function CallRoom({ call, onDisconnected, nameOf }: CallRoomProps) {
   return (
     <LiveKitRoom
       serverUrl={call.livekitUrl}
@@ -43,6 +53,7 @@ export function CallRoom({ call, onDisconnected }: CallRoomProps) {
       style={{ height: "100%" }}
     >
       <div className="flex h-full flex-col">
+        <ParticipantNames nameOf={nameOf} />
         <div className="min-h-0 flex-1">
           <CallTiles />
         </div>

@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { PhoneOff, Phone, Video } from "lucide-react";
+import { Phone, PhoneOff, Video, X } from "lucide-react";
 import { useEffect } from "react";
 import { CallRoom, CallStatusLabel } from "@/components/call-room";
 import { UserAvatar } from "@/components/user-avatar";
@@ -19,6 +19,9 @@ import { useCallStore } from "@/store/call-store";
 
 // Không bắt máy / không ai nghe sau 30s thì coi như nhỡ — khớp kế hoạch calling.
 const RING_TIMEOUT_MS = 30_000;
+// Cuộc gọi nhóm không ép người dùng phản hồi — banner tự ẩn sau một lúc, nhưng vẫn
+// có thể vào lại qua banner "Đang gọi" trong header conversation.
+const GROUP_BANNER_TIMEOUT_MS = 60_000;
 
 export function CallOverlays() {
   const socket = useSocket();
@@ -48,8 +51,6 @@ export function CallOverlays() {
         rejectIncomingCall(payload.callId);
         return;
       }
-      // Cuộc gọi nhóm có banner riêng (W16), chưa hiện overlay ở bản này.
-      if (payload.conversationType !== "DIRECT") return;
       store.setIncoming(payload);
     };
     const onJoined = ({ callId, userId, conversationId }: { callId: string; userId: string; conversationId?: string }) => {
@@ -74,15 +75,21 @@ export function CallOverlays() {
   }, [socket, queryClient, myId]);
 
   const incomingCallId = incoming?.callId;
+  const incomingIsDirect = incoming?.conversationType === "DIRECT";
   useEffect(() => {
     if (!incomingCallId) return;
+    if (!incomingIsDirect) {
+      // Nhóm: chỉ là banner nhắc, không chuông và không từ chối thay người dùng.
+      const timer = window.setTimeout(() => useCallStore.getState().clearIncoming(), GROUP_BANNER_TIMEOUT_MS);
+      return () => window.clearTimeout(timer);
+    }
     startRingtone();
     const timer = window.setTimeout(() => rejectIncomingCall(incomingCallId), RING_TIMEOUT_MS);
     return () => {
       window.clearTimeout(timer);
       stopRingtone();
     };
-  }, [incomingCallId]);
+  }, [incomingCallId, incomingIsDirect]);
 
   const activeCallId = active?.callId;
   const activeAnswered = active?.answered;
@@ -94,7 +101,12 @@ export function CallOverlays() {
 
   return (
     <>
-      {incoming && <IncomingCallOverlay call={incoming} />}
+      {incoming &&
+        (incoming.conversationType === "DIRECT" ? (
+          <IncomingCallOverlay call={incoming} />
+        ) : (
+          <GroupCallBanner call={incoming} />
+        ))}
       {active && <ActiveCallView />}
     </>
   );
@@ -136,6 +148,32 @@ function IncomingCallOverlay({ call }: { call: IncomingCallPayload }) {
   );
 }
 
+function GroupCallBanner({ call }: { call: IncomingCallPayload }) {
+  const queryClient = useQueryClient();
+  const groupName = queryClient.getQueryData<ConversationDetail>(["conversations", "detail", call.conversationId])?.name;
+  const kind = call.type === "VIDEO" ? "video" : "thoại";
+  return (
+    <div className="fixed bottom-4 right-4 z-40 flex w-80 items-center gap-3 rounded-2xl border border-border bg-popover p-4 text-popover-foreground shadow-lg">
+      <UserAvatar name={call.startedBy.displayName} src={call.startedBy.avatarUrl} />
+      <div className="min-w-0 flex-1">
+        <p className="truncate text-sm font-medium">{call.startedBy.displayName} đang gọi {kind}</p>
+        {groupName && <p className="truncate text-xs text-muted-foreground">trong {groupName}</p>}
+      </div>
+      <Button size="sm" onClick={() => acceptIncomingCall(call)}>
+        Tham gia
+      </Button>
+      <button
+        type="button"
+        aria-label="Đóng"
+        onClick={() => useCallStore.getState().clearIncoming()}
+        className="text-muted-foreground hover:text-foreground"
+      >
+        <X className="size-4" />
+      </button>
+    </div>
+  );
+}
+
 function ActiveCallView() {
   const active = useCallStore((s) => s.active)!;
   const queryClient = useQueryClient();
@@ -143,6 +181,10 @@ function ActiveCallView() {
   const detail = queryClient.getQueryData<ConversationDetail>(["conversations", "detail", active.conversationId]);
   const peer = detail?.members.find((m) => m.id !== myId);
   const title = detail?.type === "DIRECT" ? (peer?.nickname ?? peer?.displayName ?? "Cuộc gọi") : (detail?.name ?? "Cuộc gọi");
+  const nameOf = (userId: string) => {
+    const member = detail?.members.find((m) => m.id === userId);
+    return member?.nickname ?? member?.displayName ?? "Ai đó";
+  };
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-zinc-900 text-white">
@@ -151,7 +193,7 @@ function ActiveCallView() {
         {!active.answered && <CallStatusLabel label="Đang gọi" />}
       </div>
       <div className="min-h-0 flex-1">
-        <CallRoom call={active} onDisconnected={endActiveCall} />
+        <CallRoom call={active} onDisconnected={endActiveCall} nameOf={nameOf} />
       </div>
     </div>
   );

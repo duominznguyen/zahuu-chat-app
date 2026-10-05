@@ -426,7 +426,7 @@ export default function Conversation() {
             {headerSubtitle && <p className="truncate text-xs text-muted-foreground">{headerSubtitle}</p>}
           </div>
         </button>
-        {isDirect && (
+        {detailQuery.data && (
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Gọi thoại" onClick={() => void beginCall(id, "AUDIO")}>
               <Phone className="size-5" />
