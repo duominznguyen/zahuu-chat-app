@@ -13,6 +13,8 @@ import { isUniqueViolation } from '../common/prisma-errors.js';
 import { orderedPair } from '../common/ordered-pair.js';
 import type { ConversationMembership } from './decorators/membership.decorator.js';
 import {
+  CallStatus,
+  CallType,
   ConversationType,
   MemberRole,
   MessageType,
@@ -40,6 +42,12 @@ const systemMessageSelect = {
   createdAt: true,
   sender: { select: publicUserSelect },
 } as const;
+
+function callPreviewText(call: { type: CallType; status: CallStatus }) {
+  if (call.status === CallStatus.MISSED) return 'Cuộc gọi nhỡ';
+  if (call.status === CallStatus.DECLINED) return 'Đã từ chối cuộc gọi';
+  return call.type === CallType.VIDEO ? 'Cuộc gọi video' : 'Cuộc gọi thoại';
+}
 
 type SystemMessageContent = {
   event: string;
@@ -91,6 +99,7 @@ export class ConversationsService {
             isRecalled: true,
             senderId: true,
             sender: { select: { displayName: true } },
+            call: { select: { type: true, status: true } },
           },
         },
       },
@@ -1009,6 +1018,7 @@ export class ConversationsService {
         isRecalled: boolean;
         senderId: string;
         sender: { displayName: string };
+        call: { type: CallType; status: CallStatus } | null;
       } | null;
       members: Array<{
         userId: string;
@@ -1044,7 +1054,9 @@ export class ConversationsService {
               conv.lastMessage.content!,
               conv.lastMessage.sender.displayName,
             )
-          : null,
+          : conv.lastMessage.type === MessageType.CALL && conv.lastMessage.call
+            ? callPreviewText(conv.lastMessage.call)
+            : null,
     };
 
     if (conv.type === ConversationType.GROUP) {

@@ -8,7 +8,11 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { Queue } from 'bullmq';
 import type { ConversationMembership } from '../conversations/decorators/membership.decorator.js';
-import { MessageType } from '../generated/prisma/enums.js';
+import {
+  CallStatus,
+  CallType,
+  MessageType,
+} from '../generated/prisma/enums.js';
 import { MEDIA_CLEANUP_QUEUE } from '../media/media-cleanup.queue.js';
 import type { MediaCleanupJob } from '../media/media-cleanup.processor.js';
 import { MediaPurpose } from '../media/media-purpose.enum.js';
@@ -34,15 +38,29 @@ const replyToSelect = {
   isRecalled: true,
 } as const;
 
+const callSummarySelect = {
+  id: true,
+  type: true,
+  status: true,
+  startedAt: true,
+  endedAt: true,
+} as const;
+
 const messageInclude = {
   sender: { select: publicUserSelect },
   replyTo: { select: replyToSelect },
+  call: { select: callSummarySelect },
 } as const;
 
 const MEDIA_TYPES: MessageType[] = [
   MessageType.IMAGE,
   MessageType.VIDEO,
   MessageType.FILE,
+];
+// Tin do hệ thống sinh ra (sự kiện nhóm, lịch sử cuộc gọi) — không thu hồi/react/trả lời được.
+const NON_INTERACTIVE_TYPES: MessageType[] = [
+  MessageType.SYSTEM,
+  MessageType.CALL,
 ];
 const LIST_DEFAULT_LIMIT = 30;
 
@@ -64,6 +82,13 @@ type MessageWithRelations = {
     displayName: string;
     avatarUrl: string | null;
   };
+  call: {
+    id: string;
+    type: CallType;
+    status: CallStatus;
+    startedAt: Date;
+    endedAt: Date | null;
+  } | null;
   replyTo: {
     id: string;
     senderId: string;
@@ -133,8 +158,8 @@ export class MessagesService {
       if (!replyTo || replyTo.conversationId !== membership.conversationId) {
         throw new BadRequestException('replyToId không hợp lệ');
       }
-      if (replyTo.type === MessageType.SYSTEM) {
-        throw new BadRequestException('Không thể trả lời tin nhắn hệ thống');
+      if (NON_INTERACTIVE_TYPES.includes(replyTo.type)) {
+        throw new BadRequestException('Không thể trả lời tin nhắn này');
       }
     }
 
@@ -181,8 +206,8 @@ export class MessagesService {
 
   async recallMessage(userId: string, messageId: string) {
     const message = await this.loadOwnScope(userId, messageId);
-    if (message.type === MessageType.SYSTEM) {
-      throw new BadRequestException('Không thể thu hồi tin nhắn hệ thống');
+    if (NON_INTERACTIVE_TYPES.includes(message.type)) {
+      throw new BadRequestException('Không thể thu hồi tin nhắn này');
     }
     if (message.senderId !== userId) {
       throw new ForbiddenException(
@@ -223,9 +248,9 @@ export class MessagesService {
 
   async setReaction(userId: string, messageId: string, reactionType: string) {
     const message = await this.loadOwnScope(userId, messageId);
-    if (message.type === MessageType.SYSTEM) {
+    if (NON_INTERACTIVE_TYPES.includes(message.type)) {
       throw new BadRequestException(
-        'Không thể thả cảm xúc cho tin nhắn hệ thống',
+        'Không thể thả cảm xúc cho tin nhắn này',
       );
     }
     if (message.isRecalled) {
@@ -358,6 +383,7 @@ export class MessagesService {
             isRecalled: m.replyTo.isRecalled,
           }
         : null,
+      call: m.call,
       isRecalled: m.isRecalled,
       recalledAt: m.recalledAt,
       createdAt: m.createdAt,

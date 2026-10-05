@@ -52,6 +52,23 @@ interface GroupMemberAddedEvent {
   // nên tăng badge chuông hay không, không thể tự suy ra chỉ từ addedById.
   notify: boolean;
 }
+interface CallStartedEvent {
+  callId: string;
+  conversationId: string;
+  type: string;
+  startedById: string;
+  startedBy: unknown;
+}
+interface CallParticipantEvent {
+  callId: string;
+  conversationId: string;
+  userId: string;
+}
+interface CallEndedEvent {
+  callId: string;
+  conversationId: string;
+  status: string;
+}
 interface GroupMemberRemovedEvent {
   conversationId: string;
   userId: string;
@@ -275,6 +292,37 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server
       .to(conversationRoom(conversationId))
       .emit('group:updated', { conversationId, ...changedFields });
+  }
+
+  // Người gọi đã ở trong room rồi nên loại trừ theo userRoom (mọi socket của họ),
+  // tránh họ nhận chính cuộc gọi của mình như cuộc gọi đến.
+  @OnEvent('call.started')
+  onCallStarted({ callId, conversationId, type, startedById, startedBy }: CallStartedEvent) {
+    this.server
+      .to(conversationRoom(conversationId))
+      .except(userRoom(startedById))
+      .emit('call:incoming', { callId, conversationId, type, startedBy });
+  }
+
+  @OnEvent('call.participantJoined')
+  onCallParticipantJoined({ callId, conversationId, userId }: CallParticipantEvent) {
+    this.server
+      .to(conversationRoom(conversationId))
+      .emit('call:participantJoined', { callId, userId });
+  }
+
+  @OnEvent('call.participantLeft')
+  onCallParticipantLeft({ callId, conversationId, userId }: CallParticipantEvent) {
+    this.server
+      .to(conversationRoom(conversationId))
+      .emit('call:participantLeft', { callId, userId });
+  }
+
+  @OnEvent('call.ended')
+  onCallEnded({ callId, conversationId, status }: CallEndedEvent) {
+    this.server
+      .to(conversationRoom(conversationId))
+      .emit('call:ended', { callId, conversationId, status });
   }
 
   private async relayTyping(
