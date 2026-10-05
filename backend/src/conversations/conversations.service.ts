@@ -182,7 +182,14 @@ export class ConversationsService {
     }));
     const me = conv.members.find((m) => m.userId === viewerId);
 
+    // Chỉ có tối đa 1 cuộc gọi hoạt động / conversation (unique activeConversationId).
+    const activeCall = await this.prisma.call.findUnique({
+      where: { activeConversationId: conversationId },
+      select: { id: true, type: true, status: true, startedById: true },
+    });
+
     const base = {
+      activeCall,
       id: conv.id,
       type: conv.type,
       backgroundUrl: conv.backgroundUrl,

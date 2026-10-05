@@ -97,6 +97,7 @@ export class CallsService {
           conversationId: true,
           type: true,
           startedBy: { select: publicUserSelect },
+          conversation: { select: { type: true } },
         },
       });
     } catch (e) {
@@ -113,6 +114,7 @@ export class CallsService {
       callId: call.id,
       conversationId: call.conversationId,
       type: call.type,
+      conversationType: call.conversation.type,
       startedById: userId,
       startedBy: call.startedBy,
     });

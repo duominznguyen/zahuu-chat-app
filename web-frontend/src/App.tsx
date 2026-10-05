@@ -4,6 +4,7 @@ import { useEffect } from "react";
 import { BrowserRouter, Navigate, Route, Routes, useLocation, type Location } from "react-router-dom";
 import { Toaster } from "sonner";
 import { AppShellLayout } from "@/components/app-shell/app-shell-layout";
+import { CallOverlays } from "@/components/call-overlays";
 import { ConfirmDialogHost } from "@/components/confirm-dialog-host";
 import { TextPromptDialogHost } from "@/components/text-prompt-dialog-host";
 import { ProtectedRoute } from "@/components/protected-route";
@@ -224,6 +225,7 @@ function App() {
         <BrowserRouter>
           <SocketProvider>
             <AppRoutes />
+            <CallOverlays />
           </SocketProvider>
         </BrowserRouter>
       </TooltipProvider>

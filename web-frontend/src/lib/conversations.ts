@@ -1,4 +1,5 @@
 import { apiClient } from "./api-client";
+import type { ActiveCallInfo } from "./calls";
 import type { PublicUser } from "./friends";
 
 export type ConversationType = "DIRECT" | "GROUP";
@@ -59,6 +60,7 @@ export interface ConversationDetail {
   createdAt: string;
   role: MemberRole | null;
   members: ConversationMember[];
+  activeCall: ActiveCallInfo | null;
 }
 
 export function getConversationDetail(id: string) {

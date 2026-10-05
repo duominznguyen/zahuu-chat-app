@@ -1,6 +1,6 @@
 import type { InfiniteData } from "@tanstack/react-query";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageCircle, X } from "lucide-react";
+import { MessageCircle, Phone, Video, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
@@ -29,7 +29,9 @@ import {
   type MessagesPage,
   type ReactionType,
 } from "@/lib/messages";
+import { beginCall, joinExistingCall } from "@/lib/call-actions";
 import { replyPreviewLabel } from "@/lib/reply-preview";
+import { useCallStore } from "@/store/call-store";
 import { useSocket } from "@/providers/socket-provider";
 import { useAuthStore } from "@/store/auth-store";
 import { useUploadStore } from "@/store/upload-store";
@@ -375,6 +377,11 @@ export default function Conversation() {
   });
 
   const isDirect = detailQuery.data?.type === "DIRECT";
+  const activeCallId = useCallStore((s) => s.active?.callId);
+  const callInfo = detailQuery.data?.activeCall;
+  // Đang ở trong chính cuộc gọi này thì không cần banner "Tham gia" nữa.
+  const ongoingCall =
+    callInfo?.status === "ONGOING" && callInfo.id !== activeCallId ? callInfo : null;
   const otherMember = isDirect ? detailQuery.data?.members.find((m) => m.id !== myId) : undefined;
   const title = detailQuery.data?.name ?? "...";
   const headerSubtitle = isDirect && otherMember?.isOnline ? "Đang hoạt động" : undefined;
@@ -419,7 +426,30 @@ export default function Conversation() {
             {headerSubtitle && <p className="truncate text-xs text-muted-foreground">{headerSubtitle}</p>}
           </div>
         </button>
+        {isDirect && (
+          <div className="flex items-center gap-1">
+            <Button variant="ghost" size="icon" aria-label="Gọi thoại" onClick={() => void beginCall(id, "AUDIO")}>
+              <Phone className="size-5" />
+            </Button>
+            <Button variant="ghost" size="icon" aria-label="Gọi video" onClick={() => void beginCall(id, "VIDEO")}>
+              <Video className="size-5" />
+            </Button>
+          </div>
+        )}
       </div>
+
+      {ongoingCall && (
+        <div className="flex items-center justify-between gap-3 border-b border-border bg-success/10 px-4 py-2 text-sm">
+          <span className="text-foreground">Cuộc gọi đang diễn ra</span>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => void joinExistingCall(ongoingCall.id, id, ongoingCall.type)}
+          >
+            Tham gia
+          </Button>
+        </div>
+      )}
 
       <ConversationInfoSheet conversationId={id} open={infoOpen} onOpenChange={setInfoOpen} />
 

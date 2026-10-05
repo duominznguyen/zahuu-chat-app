@@ -56,6 +56,7 @@ interface CallStartedEvent {
   callId: string;
   conversationId: string;
   type: string;
+  conversationType: string;
   startedById: string;
   startedBy: unknown;
 }
@@ -297,25 +298,25 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   // Người gọi đã ở trong room rồi nên loại trừ theo userRoom (mọi socket của họ),
   // tránh họ nhận chính cuộc gọi của mình như cuộc gọi đến.
   @OnEvent('call.started')
-  onCallStarted({ callId, conversationId, type, startedById, startedBy }: CallStartedEvent) {
+  onCallStarted({ callId, conversationId, type, conversationType, startedById, startedBy }: CallStartedEvent) {
     this.server
       .to(conversationRoom(conversationId))
       .except(userRoom(startedById))
-      .emit('call:incoming', { callId, conversationId, type, startedBy });
+      .emit('call:incoming', { callId, conversationId, type, conversationType, startedBy });
   }
 
   @OnEvent('call.participantJoined')
   onCallParticipantJoined({ callId, conversationId, userId }: CallParticipantEvent) {
     this.server
       .to(conversationRoom(conversationId))
-      .emit('call:participantJoined', { callId, userId });
+      .emit('call:participantJoined', { callId, conversationId, userId });
   }
 
   @OnEvent('call.participantLeft')
   onCallParticipantLeft({ callId, conversationId, userId }: CallParticipantEvent) {
     this.server
       .to(conversationRoom(conversationId))
-      .emit('call:participantLeft', { callId, userId });
+      .emit('call:participantLeft', { callId, conversationId, userId });
   }
 
   @OnEvent('call.ended')

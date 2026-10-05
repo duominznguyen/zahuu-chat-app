@@ -1,4 +1,5 @@
 import { apiClient } from "./api-client";
+import type { CallSummary } from "./calls";
 import type { PublicUser } from "./friends";
 
 export type MessageType =
@@ -7,7 +8,8 @@ export type MessageType =
   | "VIDEO"
   | "FILE"
   | "STICKER"
-  | "SYSTEM";
+  | "SYSTEM"
+  | "CALL";
 export type ReactionType = "like" | "love" | "haha" | "wow" | "sad" | "angry";
 
 export interface ReplyToPreview {
@@ -31,6 +33,7 @@ export interface Message {
   mediaName: string | null;
   mediaSize: number | null;
   replyTo: ReplyToPreview | null;
+  call: CallSummary | null;
   isRecalled: boolean;
   recalledAt: string | null;
   createdAt: string;

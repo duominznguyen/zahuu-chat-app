@@ -11,6 +11,8 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { beginCall } from "@/lib/call-actions";
+import { callHistoryLabel } from "@/lib/calls";
 import type { ConversationMember } from "@/lib/conversations";
 import { formatBytes } from "@/lib/media";
 import type { Message, ReactionType } from "@/lib/messages";
@@ -139,6 +141,26 @@ export function MessageBubble({
         <p className="text-center text-xs text-muted-foreground">
           {message.content ? systemMessageText(message.content, message.sender, members) : ""}
         </p>
+      </div>
+    );
+  }
+
+  // Lịch sử cuộc gọi cũng là tin hệ thống: không thu hồi/react/trả lời được (server chặn),
+  // nên chỉ hiện 1 dòng + nút gọi lại đúng loại cuộc gọi cũ.
+  if (message.type === "CALL" && message.call) {
+    const missedOrDeclined = message.call.status === "MISSED" || message.call.status === "DECLINED";
+    return (
+      <div id={`message-${message.id}`} className="my-2 flex flex-col items-center gap-1 px-8">
+        <p className={`text-center text-xs ${missedOrDeclined ? "text-danger" : "text-muted-foreground"}`}>
+          {callHistoryLabel(message.call)}
+        </p>
+        <button
+          type="button"
+          onClick={() => void beginCall(message.conversationId, message.call!.type)}
+          className="text-xs font-medium text-primary hover:underline"
+        >
+          Gọi lại
+        </button>
       </div>
     );
   }
