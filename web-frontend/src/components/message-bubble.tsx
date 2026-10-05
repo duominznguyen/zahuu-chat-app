@@ -1,4 +1,17 @@
-import { CornerUpLeft, Copy, FileText, MoreHorizontal, Trash2, Undo2 } from "lucide-react";
+import {
+  CornerUpLeft,
+  Copy,
+  FileText,
+  MoreHorizontal,
+  Phone,
+  PhoneMissed,
+  PhoneOff,
+  Trash2,
+  Undo2,
+  Video,
+  VideoOff,
+} from "lucide-react";
+import type { CallSummary } from "@/lib/calls";
 import { useState } from "react";
 import { toast } from "sonner";
 import { MediaPreview } from "@/components/media-preview";
@@ -12,7 +25,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { beginCall } from "@/lib/call-actions";
-import { callHistoryLabel } from "@/lib/calls";
+import { callSubtitle, callTitle } from "@/lib/calls";
 import type { ConversationMember } from "@/lib/conversations";
 import { formatBytes } from "@/lib/media";
 import type { Message, ReactionType } from "@/lib/messages";
@@ -93,6 +106,17 @@ function ReplyQuoteContent({
   );
 }
 
+// Icon theo loại + kết quả: nhỡ/từ chối dùng icon gạch, video dùng camera thay điện thoại.
+function callIcon(call: CallSummary) {
+  if (call.status === "MISSED") {
+    return call.type === "VIDEO" ? <VideoOff className="size-4" /> : <PhoneMissed className="size-4" />;
+  }
+  if (call.status === "DECLINED") {
+    return call.type === "VIDEO" ? <VideoOff className="size-4" /> : <PhoneOff className="size-4" />;
+  }
+  return call.type === "VIDEO" ? <Video className="size-4" /> : <Phone className="size-4" />;
+}
+
 interface MessageBubbleProps {
   message: Message;
   isOwn: boolean;
@@ -145,22 +169,41 @@ export function MessageBubble({
     );
   }
 
-  // Lịch sử cuộc gọi cũng là tin hệ thống: không thu hồi/react/trả lời được (server chặn),
-  // nên chỉ hiện 1 dòng + nút gọi lại đúng loại cuộc gọi cũ.
+  // Lịch sử cuộc gọi không thu hồi/react/trả lời được (server chặn), nhưng vẫn hiển
+  // thị như tin nhắn: nằm bên người bắt đầu cuộc gọi (giống Messenger), không căn giữa.
   if (message.type === "CALL" && message.call) {
-    const missedOrDeclined = message.call.status === "MISSED" || message.call.status === "DECLINED";
+    const call = message.call;
     return (
-      <div id={`message-${message.id}`} className="my-2 flex flex-col items-center gap-1 px-8">
-        <p className={`text-center text-xs ${missedOrDeclined ? "text-danger" : "text-muted-foreground"}`}>
-          {callHistoryLabel(message.call)}
-        </p>
-        <button
-          type="button"
-          onClick={() => void beginCall(message.conversationId, message.call!.type)}
-          className="text-xs font-medium text-primary hover:underline"
-        >
-          Gọi lại
-        </button>
+      <div id={`message-${message.id}`} className={`px-4 ${clusterMarginClass(showAvatar)}`}>
+        {!isOwn && showSenderName && (
+          <p className="mb-0.5 ml-9 text-xs font-medium text-muted-foreground">{message.sender.displayName}</p>
+        )}
+        <div className={`flex items-end gap-2 ${isOwn ? "justify-end" : "justify-start"}`}>
+          {!isOwn &&
+            (showAvatar ? (
+              <UserAvatar name={message.sender.displayName} src={message.sender.avatarUrl} />
+            ) : (
+              <div className="size-8 shrink-0" />
+            ))}
+          <div className="flex w-56 max-w-[70%] flex-col gap-2 rounded-2xl bg-secondary p-3">
+            <div className="flex items-center gap-3 px-1">
+              <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-muted-foreground shadow-sm dark:bg-zinc-700">
+                {callIcon(call)}
+              </span>
+              <div className="min-w-0">
+                <p className="text-sm font-medium text-foreground">{callTitle(call)}</p>
+                <p className="text-xs text-muted-foreground">{callSubtitle(call)}</p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => void beginCall(message.conversationId, call.type)}
+              className="w-full rounded-xl bg-white py-2 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50 dark:bg-zinc-700 dark:hover:bg-zinc-600"
+            >
+              Gọi lại
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

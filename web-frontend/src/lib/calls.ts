@@ -1,3 +1,4 @@
+import { formatRelativeTime } from "./format-time";
 import { apiClient } from "./api-client";
 import type { PublicUser } from "./friends";
 
@@ -53,18 +54,23 @@ export interface IncomingCallPayload {
   startedBy: PublicUser;
 }
 
-export function callHistoryLabel(call: CallSummary) {
+export function callTitle(call: CallSummary) {
   const kind = call.type === "VIDEO" ? "video" : "thoại";
-  switch (call.status) {
-    case "ENDED":
-      return `Cuộc gọi ${kind} · ${formatCallDuration(call.startedAt, call.endedAt)}`;
-    case "MISSED":
-      return "Cuộc gọi nhỡ";
-    case "DECLINED":
-      return "Đã từ chối cuộc gọi";
-    default:
-      return `Cuộc gọi ${kind}`;
-  }
+  return call.status === "MISSED" ? `Cuộc gọi nhỡ ${kind}` : `Cuộc gọi ${kind}`;
+}
+
+// Cuộc gọi đã nghe hiện thời lượng; nhỡ/từ chối hiện thời điểm gọi.
+export function callSubtitle(call: CallSummary) {
+  if (call.status === "ENDED") return formatCallDuration(call.startedAt, call.endedAt);
+  return formatCallTime(call.startedAt);
+}
+
+// AM/PM để phân biệt nhanh với thời lượng (m:ss) của cuộc gọi đã nghe.
+function formatCallTime(iso: string) {
+  const date = new Date(iso);
+  const time = date.toLocaleTimeString("en-US", { hour: "numeric", minute: "2-digit", hour12: true });
+  const sameDay = date.toDateString() === new Date().toDateString();
+  return sameDay ? time : `${formatRelativeTime(iso)} ${time}`;
 }
 
 export function formatCallDuration(startedAt: string, endedAt: string | null) {

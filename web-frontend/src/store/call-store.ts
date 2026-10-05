@@ -14,10 +14,14 @@ export interface ActiveCall {
 
 interface CallState {
   active: ActiveCall | null;
+  // true = thu gọn thành pill nổi, phòng LiveKit vẫn kết nối.
+  minimized: boolean;
   incoming: IncomingCallPayload | null;
   setActive: (call: ActiveCall) => void;
   markAnswered: () => void;
   clearActive: () => void;
+  minimizeCall: () => void;
+  restoreCall: () => void;
   setIncoming: (call: IncomingCallPayload) => void;
   clearIncoming: () => void;
 }
@@ -25,11 +29,14 @@ interface CallState {
 // Tách khỏi route: cuộc gọi phải sống khi người dùng chuyển sang màn/tab khác.
 export const useCallStore = create<CallState>((set) => ({
   active: null,
+  minimized: false,
   incoming: null,
-  setActive: (call) => set({ active: call }),
+  setActive: (call) => set({ active: call, minimized: false }),
   markAnswered: () =>
     set((s) => (s.active ? { active: { ...s.active, answered: true } } : s)),
-  clearActive: () => set({ active: null }),
+  clearActive: () => set({ active: null, minimized: false }),
+  minimizeCall: () => set({ minimized: true }),
+  restoreCall: () => set({ minimized: false }),
   setIncoming: (call) => set({ incoming: call }),
   clearIncoming: () => set({ incoming: null }),
 }));

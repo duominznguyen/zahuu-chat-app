@@ -1,5 +1,5 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { Phone, PhoneOff, Video, X } from "lucide-react";
+import { Minimize2, Phone, PhoneOff, Video, X } from "lucide-react";
 import { useEffect } from "react";
 import { CallRoom, CallStatusLabel } from "@/components/call-room";
 import { UserAvatar } from "@/components/user-avatar";
@@ -176,6 +176,7 @@ function GroupCallBanner({ call }: { call: IncomingCallPayload }) {
 
 function ActiveCallView() {
   const active = useCallStore((s) => s.active)!;
+  const minimized = useCallStore((s) => s.minimized);
   const queryClient = useQueryClient();
   const myId = useAuthStore((s) => s.user?.id);
   const detail = queryClient.getQueryData<ConversationDetail>(["conversations", "detail", active.conversationId]);
@@ -186,14 +187,40 @@ function ActiveCallView() {
     return member?.nickname ?? member?.displayName ?? "Ai đó";
   };
 
+  // Đổi class và giữ nguyên cây con: phòng LiveKit không bị unmount khi thu nhỏ/mở lại.
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-zinc-900 text-white">
-      <div className="flex items-center justify-between px-6 py-4">
-        <p className="font-medium">{title}</p>
-        {!active.answered && <CallStatusLabel label="Đang gọi" />}
-      </div>
-      <div className="min-h-0 flex-1">
-        <CallRoom call={active} onDisconnected={endActiveCall} nameOf={nameOf} />
+    <div
+      className={
+        minimized
+          ? "fixed bottom-20 right-4 z-40 h-16 w-md overflow-hidden rounded-2xl border border-white/10 bg-zinc-900 text-white shadow-xl"
+          : "fixed inset-0 z-50 flex flex-col bg-zinc-900 text-white"
+      }
+    >
+      {!minimized && (
+        <div className="flex items-center justify-between px-6 py-4">
+          <p className="font-medium">{title}</p>
+          <div className="flex items-center gap-4">
+            {!active.answered && <CallStatusLabel label="Đang gọi" />}
+            <button
+              type="button"
+              aria-label="Thu nhỏ cuộc gọi"
+              onClick={() => useCallStore.getState().minimizeCall()}
+              className="text-white/70 hover:text-white"
+            >
+              <Minimize2 className="size-5" />
+            </button>
+          </div>
+        </div>
+      )}
+      <div className={minimized ? "h-full" : "min-h-0 flex-1"}>
+        <CallRoom
+          call={active}
+          onDisconnected={endActiveCall}
+          nameOf={nameOf}
+          minimized={minimized}
+          title={title}
+          onRestore={() => useCallStore.getState().restoreCall()}
+        />
       </div>
     </div>
   );
