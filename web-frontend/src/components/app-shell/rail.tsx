@@ -1,6 +1,7 @@
-import { Bell, LogOut, MessageCircle, Settings, Users } from "lucide-react";
+import { LogOut, MessageCircle, Settings, Users } from "lucide-react";
 import { Link, useLocation } from "react-router-dom";
 import { toast } from "sonner";
+import { NotificationsBell } from "@/components/notifications-bell";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
   DropdownMenu,
@@ -8,17 +9,10 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { logout } from "@/lib/auth";
 import { useAuthStore } from "@/store/auth-store";
-
-const railItemClass = (active: boolean) =>
-  `flex size-11 items-center justify-center rounded-2xl transition-colors ${
-    active
-      ? "bg-primary text-primary-foreground"
-      : "text-muted-foreground hover:bg-accent hover:text-foreground"
-  }`;
+import { railItemClass } from "./rail-item-class";
 
 function RailLink({
   to,
@@ -65,18 +59,7 @@ export function Rail() {
           active={location.pathname.startsWith("/friends")}
         />
 
-        <Popover>
-          <PopoverTrigger asChild>
-            <button type="button" aria-label="Thông báo" className={railItemClass(false)}>
-              <Bell className="size-5" />
-            </button>
-          </PopoverTrigger>
-          <PopoverContent side="right" align="start" className="w-80">
-            <p className="py-6 text-center text-sm text-muted-foreground">
-              Chưa có thông báo nào
-            </p>
-          </PopoverContent>
-        </Popover>
+        <NotificationsBell />
       </div>
 
       <DropdownMenu>
