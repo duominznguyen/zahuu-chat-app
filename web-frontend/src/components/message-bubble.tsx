@@ -13,6 +13,8 @@ import {
 } from "lucide-react";
 import type { CallSummary } from "@/lib/calls";
 import { useState } from "react";
+import { useLocation, useNavigate } from "react-router-dom";
+import { rootBackground } from "@/lib/background-location";
 import { toast } from "sonner";
 import { MediaPreview } from "@/components/media-preview";
 import { UserAvatar } from "@/components/user-avatar";
@@ -155,6 +157,10 @@ export function MessageBubble({
   onJumpToMessage,
 }: MessageBubbleProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+  const navigate = useNavigate();
+  const location = useLocation();
+  const openSenderProfile = () =>
+    navigate(`/u/${message.sender.id}`, { state: { background: rootBackground(location) } });
 
   // Tin SYSTEM (sự kiện nhóm) không phải tin nhắn thật — không avatar/bong
   // bóng màu/menu "...", chỉ 1 dòng text nhỏ căn giữa. Chặn hẳn từ phía
@@ -174,18 +180,20 @@ export function MessageBubble({
   if (message.type === "CALL" && message.call) {
     const call = message.call;
     return (
-      <div id={`message-${message.id}`} className={`px-4 ${clusterMarginClass(showAvatar)}`}>
+      <div id={`message-${message.id}`} className={clusterMarginClass(showAvatar)}>
         {!isOwn && showSenderName && (
           <p className="mb-0.5 ml-9 text-xs font-medium text-muted-foreground">{message.sender.displayName}</p>
         )}
         <div className={`flex items-end gap-2 ${isOwn ? "justify-end" : "justify-start"}`}>
           {!isOwn &&
             (showAvatar ? (
-              <UserAvatar name={message.sender.displayName} src={message.sender.avatarUrl} />
+              <button type="button" aria-label={`Xem hồ sơ ${message.sender.displayName}`} onClick={openSenderProfile} className="shrink-0 rounded-full">
+                <UserAvatar name={message.sender.displayName} src={message.sender.avatarUrl} />
+              </button>
             ) : (
               <div className="size-8 shrink-0" />
             ))}
-          <div className="flex w-56 max-w-[70%] flex-col gap-2 rounded-2xl bg-secondary p-3">
+          <div className="flex w-56 max-w-[65%] flex-col gap-2 rounded-2xl bg-secondary p-3">
             <div className="flex items-center gap-3 px-1">
               <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-white text-muted-foreground shadow-sm dark:bg-zinc-700">
                 {callIcon(call)}
@@ -259,7 +267,9 @@ export function MessageBubble({
       <div className={`group/bubble flex items-end gap-2 ${isOwn ? "justify-end" : "justify-start"}`}>
         {!isOwn &&
           (showAvatar ? (
-            <UserAvatar name={message.sender.displayName} src={message.sender.avatarUrl} />
+            <button type="button" aria-label={`Xem hồ sơ ${message.sender.displayName}`} onClick={openSenderProfile} className="shrink-0 rounded-full">
+              <UserAvatar name={message.sender.displayName} src={message.sender.avatarUrl} />
+            </button>
           ) : (
             <div className="size-8 shrink-0" />
           ))}

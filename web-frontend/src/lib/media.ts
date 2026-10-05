@@ -1,3 +1,4 @@
+import JSZip from "jszip";
 import { env } from "./env";
 
 export type MediaPurpose = "AVATAR" | "COVER" | "GROUP_AVATAR" | "BACKGROUND" | "MESSAGE";
@@ -64,19 +65,35 @@ export function messageTypeForFile(file: File): "IMAGE" | "VIDEO" | "FILE" {
 export const ACCEPTED_MEDIA_TYPES =
   "image/jpeg,image/png,image/webp,image/gif,video/mp4,video/quicktime,video/webm,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/zip";
 
-// Cloudinary là domain khác origin -> thuộc tính `download` của <a> không
-// được trình duyệt đảm bảo tôn trọng (chỉ chắc chắn hoạt động same-origin),
-// nhưng vẫn là cách đơn giản nhất không cần tự fetch blob — tệ nhất thì mở
-// tab mới thay vì tải thẳng, người dùng vẫn lưu được bằng tay.
+// Cloudinary không trả header CORS nên không fetch blob được từ app, và thuộc tính
+// `download` của <a> bị bỏ qua với URL khác origin (trước đây chỉ mở tab mới).
+// Biến đổi `fl_attachment` khiến Cloudinary trả Content-Disposition: attachment,
+// trình duyệt tải thẳng về; `fl_attachment:<tên>` đặt tên file (không có dấu chấm,
+// Cloudinary tự thêm phần mở rộng).
+export function attachmentUrl(url: string, filename?: string): string {
+  if (!url.includes("/upload/")) return url;
+  const name = filename?.replace(/\.[^.]+$/, "").replace(/\./g, "_");
+  const flag = name ? `fl_attachment:${encodeURIComponent(name)}` : "fl_attachment";
+  return url.replace("/upload/", `/upload/${flag}/`);
+}
+
 export function downloadFile(url: string, filename?: string) {
   const a = document.createElement("a");
-  a.href = url;
-  if (filename) a.download = filename;
-  a.target = "_blank";
-  a.rel = "noopener noreferrer";
+  a.href = attachmentUrl(url, filename);
   document.body.appendChild(a);
   a.click();
   a.remove();
+}
+
+// File không phải ảnh/video được nén thành .zip trước khi upload: chỉ tải về, không preview.
+export async function zipForUpload(file: File): Promise<File> {
+  if (file.type === "application/zip" || file.type.startsWith("image/") || file.type.startsWith("video/")) {
+    return file;
+  }
+  const zip = new JSZip();
+  zip.file(file.name, file);
+  const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+  return new File([blob], `${file.name}.zip`, { type: "application/zip" });
 }
 
 export function formatBytes(bytes: number) {

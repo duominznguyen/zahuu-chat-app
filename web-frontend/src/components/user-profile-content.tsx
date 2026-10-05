@@ -1,21 +1,19 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Loader2 } from "lucide-react";
+import { Ban, Inbox, Loader2, MessageCircle, Phone, ShieldOff, UserMinus, UserPlus } from "lucide-react";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ErrorState } from "@/components/error-state";
-import { UserAvatar } from "@/components/user-avatar";
+import { ListRow } from "@/components/list-row";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
-import { createDirectConversation } from "@/lib/conversations";
+import { beginCall } from "@/lib/call-actions";
 import { confirm } from "@/lib/confirm";
+import { createDirectConversation } from "@/lib/conversations";
 import {
   blockUser,
+  cancelFriendRequest,
   getUserProfile,
+  listFriendRequests,
   sendFriendRequest,
   unblockUser,
   unfriend,
@@ -26,6 +24,10 @@ const GENDER_LABEL: Record<string, string> = {
   FEMALE: "Nữ",
   OTHER: "Khác",
 };
+
+// Ngày sinh/giới tính bị backend bỏ khỏi response khi chưa là bạn (undefined), khác với
+// null là "chưa cập nhật" — nên vẫn giữ nhãn nhưng che giá trị bằng ký tự ẩn.
+const HIDDEN_VALUE = "••••••••";
 
 export function UserProfileContent({ userId }: { userId: string }) {
   const navigate = useNavigate();
@@ -48,6 +50,24 @@ export function UserProfileContent({ userId }: { userId: string }) {
       toast.success("Đã gửi lời mời kết bạn");
       invalidateProfile();
     },
+  });
+
+  // Profile không trả id lời mời, nên tra trong danh sách đã gửi để huỷ đúng lời mời này.
+  const cancelRequestMutation = useMutation({
+    mutationFn: async () => {
+      const sent = await queryClient.fetchQuery({
+        queryKey: ["friend-requests", "sent"],
+        queryFn: () => listFriendRequests("sent"),
+      });
+      const request = sent.find((r) => r.user.id === userId);
+      if (!request) throw new Error("Không tìm thấy lời mời");
+      return cancelFriendRequest(request.id);
+    },
+    onSuccess: () => {
+      toast.success("Đã hủy lời mời kết bạn");
+      invalidateProfile();
+    },
+    onError: () => toast.error("Hủy lời mời thất bại, vui lòng thử lại"),
   });
 
   const unfriendMutation = useMutation({
@@ -75,9 +95,20 @@ export function UserProfileContent({ userId }: { userId: string }) {
     },
   });
 
-  const messageMutation = useMutation({
+  // Nhắn tin và gọi điện đều cần conversation DIRECT — tạo (hoặc lấy lại) rồi mở chat.
+  const openDirectMutation = useMutation({
     mutationFn: () => createDirectConversation(userId),
     onSuccess: (conv) => navigate(`/chat/${conv.id}`),
+    onError: () => toast.error("Không mở được đoạn chat, vui lòng thử lại"),
+  });
+
+  const startCallMutation = useMutation({
+    mutationFn: () => createDirectConversation(userId),
+    onSuccess: (conv) => {
+      navigate(`/chat/${conv.id}`);
+      void beginCall(conv.id, "AUDIO");
+    },
+    onError: () => toast.error("Không bắt đầu được cuộc gọi, vui lòng thử lại"),
   });
 
   if (query.isLoading) {
@@ -98,106 +129,140 @@ export function UserProfileContent({ userId }: { userId: string }) {
 
   const user = query.data;
   const status = user.relationshipStatus;
+  const isFriend = status === "friends";
+  const isSelf = status === "self";
+
+  const birthdayValue =
+    user.birthday === undefined
+      ? HIDDEN_VALUE
+      : user.birthday === null
+        ? "Chưa cập nhật"
+        : new Date(user.birthday).toLocaleDateString("vi-VN");
+  const genderValue =
+    user.gender === undefined
+      ? HIDDEN_VALUE
+      : user.gender === null
+        ? "Chưa cập nhật"
+        : (GENDER_LABEL[user.gender] ?? user.gender);
+
+  const confirmUnfriend = async () => {
+    const ok = await confirm({ title: "Hủy kết bạn?", destructive: true, confirmLabel: "Hủy kết bạn" });
+    if (ok) unfriendMutation.mutate();
+  };
+  const confirmBlock = async () => {
+    const ok = await confirm({ title: "Chặn người này?", destructive: true, confirmLabel: "Chặn" });
+    if (ok) blockMutation.mutate();
+  };
 
   return (
-    <div className="flex flex-col items-center gap-3 p-6">
-      <UserAvatar name={user.displayName} src={user.avatarUrl} size="lg" />
-      <div className="flex flex-col items-center gap-1">
-        <p className="text-xl font-semibold text-foreground">{user.displayName}</p>
-        <p className="text-muted-foreground">@{user.username}</p>
+    <div className="flex flex-col">
+      <div className="relative h-40 w-full bg-muted">
+        {user.coverUrl && <img src={user.coverUrl} alt="" className="size-full object-cover" />}
       </div>
-      {user.bio && <p className="text-center text-sm text-foreground">{user.bio}</p>}
-      {user.birthday && (
-        <p className="text-sm text-muted-foreground">
-          Sinh ngày {new Date(user.birthday).toLocaleDateString("vi-VN")}
-        </p>
-      )}
-      {user.gender && (
-        <p className="text-sm text-muted-foreground">
-          {GENDER_LABEL[user.gender] ?? user.gender}
-        </p>
-      )}
 
-      <div className="flex w-full max-w-xs flex-col gap-3 pt-4">
-        {status === "friends" && (
-          <>
-            <Button disabled={messageMutation.isPending} onClick={() => messageMutation.mutate()}>
-              {messageMutation.isPending && <Loader2 className="animate-spin" />}
-              Nhắn tin
-            </Button>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <Button variant="secondary">Thêm tùy chọn</Button>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent align="center" className="w-56">
-                <DropdownMenuItem
-                  variant="destructive"
-                  onClick={async () => {
-                    const ok = await confirm({
-                      title: "Hủy kết bạn?",
-                      destructive: true,
-                      confirmLabel: "Hủy kết bạn",
-                    });
-                    if (ok) unfriendMutation.mutate();
-                  }}
-                >
-                  Hủy kết bạn
-                </DropdownMenuItem>
-                <DropdownMenuItem
-                  variant="destructive"
-                  onClick={async () => {
-                    const ok = await confirm({
-                      title: "Chặn người này?",
-                      destructive: true,
-                      confirmLabel: "Chặn",
-                    });
-                    if (ok) blockMutation.mutate();
-                  }}
-                >
-                  Chặn
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </>
-        )}
+      <div className="-mt-12 flex flex-col items-center gap-1 px-6">
+        <Avatar className="size-24 ring-4 ring-background">
+          <AvatarImage src={user.avatarUrl ?? undefined} alt={user.displayName} />
+          <AvatarFallback className="text-2xl">{user.displayName.trim().slice(0, 1).toUpperCase()}</AvatarFallback>
+        </Avatar>
+        <p className="pt-2 text-xl font-semibold text-foreground">{user.displayName}</p>
+        <p className="text-sm text-muted-foreground">@{user.username}</p>
+      </div>
 
-        {status === "none" && (
-          <Button
-            disabled={sendRequestMutation.isPending}
-            onClick={() => sendRequestMutation.mutate()}
-          >
-            {sendRequestMutation.isPending && <Loader2 className="animate-spin" />}
-            Kết bạn
-          </Button>
-        )}
-
-        {status === "pending_sent" && <Button disabled>Đã gửi lời mời</Button>}
-
-        {status === "pending_received" && (
-          <>
-            <p className="text-center text-sm text-muted-foreground">
-              {user.displayName} đã gửi cho bạn lời mời kết bạn
-            </p>
-            <Button onClick={() => navigate("/friends?tab=requests")}>
-              Xem lời mời kết bạn
-            </Button>
-          </>
-        )}
-
-        {status === "blocked" && (
+      {isFriend && (
+        <div className="flex gap-3 px-6 pt-5">
           <Button
             variant="secondary"
-            disabled={unblockMutation.isPending}
-            onClick={async () => {
-              const ok = await confirm({ title: "Bỏ chặn?" });
-              if (ok) unblockMutation.mutate();
-            }}
+            className="flex-1"
+            disabled={startCallMutation.isPending}
+            onClick={() => startCallMutation.mutate()}
           >
-            {unblockMutation.isPending && <Loader2 className="animate-spin" />}
-            Bỏ chặn
+            {startCallMutation.isPending ? <Loader2 className="animate-spin" /> : <Phone />}
+            Gọi điện
           </Button>
-        )}
+          <Button
+            className="flex-1"
+            disabled={openDirectMutation.isPending}
+            onClick={() => openDirectMutation.mutate()}
+          >
+            {openDirectMutation.isPending ? <Loader2 className="animate-spin" /> : <MessageCircle />}
+            Nhắn tin
+          </Button>
+        </div>
+      )}
+
+      <div className="mt-5 border-t border-border px-6">
+        <p className="pt-4 pb-1 text-xs font-medium text-muted-foreground">Thông tin cá nhân</p>
+        <InfoRow label="Giới thiệu" value={user.bio ?? "Chưa cập nhật"} />
+        <InfoRow label="Ngày sinh" value={birthdayValue} />
+        <InfoRow label="Giới tính" value={genderValue} />
       </div>
+
+      {!isSelf && (
+        <div className="mt-4 border-t border-border">
+          <p className="px-6 pt-4 pb-1 text-xs font-medium text-muted-foreground">Quản lý và bảo mật</p>
+
+          {status === "friends" && (
+            <ListRow
+              leading={<UserMinus className="size-5 shrink-0 text-destructive" />}
+              title="Hủy kết bạn"
+              destructive
+              onClick={confirmUnfriend}
+            />
+          )}
+
+          {status === "none" && (
+            <ListRow
+              leading={<UserPlus className="size-5 shrink-0 text-muted-foreground" />}
+              title="Gửi lời mời kết bạn"
+              onClick={() => sendRequestMutation.mutate()}
+            />
+          )}
+
+          {status === "pending_sent" && (
+            <ListRow
+              leading={<UserMinus className="size-5 shrink-0 text-muted-foreground" />}
+              title="Hủy lời mời kết bạn"
+              onClick={() => cancelRequestMutation.mutate()}
+            />
+          )}
+
+          {status === "pending_received" && (
+            <ListRow
+              leading={<Inbox className="size-5 shrink-0 text-muted-foreground" />}
+              title="Xem lời mời kết bạn"
+              onClick={() => navigate("/friends?tab=requests")}
+            />
+          )}
+
+          {status === "blocked" ? (
+            <ListRow
+              leading={<ShieldOff className="size-5 shrink-0 text-muted-foreground" />}
+              title="Bỏ chặn"
+              onClick={async () => {
+                const ok = await confirm({ title: "Bỏ chặn?" });
+                if (ok) unblockMutation.mutate();
+              }}
+            />
+          ) : (
+            <ListRow
+              leading={<Ban className="size-5 shrink-0 text-destructive" />}
+              title="Chặn"
+              destructive
+              onClick={confirmBlock}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-start justify-between gap-4 border-b border-border py-3 last:border-b-0">
+      <span className="shrink-0 text-sm text-muted-foreground">{label}</span>
+      <span className="text-right text-sm text-foreground">{value}</span>
     </div>
   );
 }

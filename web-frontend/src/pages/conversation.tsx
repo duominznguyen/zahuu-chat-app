@@ -1,8 +1,9 @@
 import type { InfiniteData } from "@tanstack/react-query";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { MessageCircle, Phone, Video, X } from "lucide-react";
+import { Info, MessageCircle, Phone, Video, X } from "lucide-react";
 import { useEffect, useRef, useState, type DragEvent } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useLocation, useNavigate, useParams } from "react-router-dom";
+import { rootBackground } from "@/lib/background-location";
 import { toast } from "sonner";
 import { ChatInput } from "@/components/chat-input";
 import { ConversationInfoSheet } from "@/components/conversation-info-sheet";
@@ -19,6 +20,7 @@ import { getConversationDetail, type ConversationDetail } from "@/lib/conversati
 import { downloadFile } from "@/lib/media";
 import {
   deleteMessageForMe,
+  getMessagesAround,
   listMessages,
   markRead,
   recallMessage,
@@ -103,6 +105,24 @@ function prependMessage(data: MessagesCache | undefined, message: Message): Mess
 
 const TYPING_EXPIRE_MS = 5000;
 
+// Chỉ DIRECT mới bấm được (mở hồ sơ người kia); nhóm giữ nguyên, bấm tên/avatar nhóm không làm gì.
+function HeaderIdentity({
+  clickable,
+  onClick,
+  children,
+}: {
+  clickable: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  if (!clickable) return <div className="flex min-w-0 flex-1 items-center gap-3">{children}</div>;
+  return (
+    <button type="button" onClick={onClick} className="flex min-w-0 flex-1 items-center gap-3 text-left">
+      {children}
+    </button>
+  );
+}
+
 function typingLabel(isDirect: boolean, names: string[]): string {
   if (isDirect) return "Đang nhập...";
   if (names.length === 1) return `${names[0]} đang nhập...`;
@@ -114,6 +134,7 @@ export default function Conversation() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const id = conversationId!;
   const navigate = useNavigate();
+  const location = useLocation();
   const socket = useSocket();
   const queryClient = useQueryClient();
   const myId = useAuthStore((s) => s.user?.id);
@@ -123,6 +144,20 @@ export default function Conversation() {
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  // Id hội thoại đang hiển thị cửa sổ "nhảy tới tin cũ" (chưa có tin mới hơn trong cache).
+  const [newerWindowFor, setNewerWindowFor] = useState<string | null>(null);
+  const hasNewerWindow = newerWindowFor === id;
+  const newerWindowRef = useRef(false);
+  useEffect(() => {
+    newerWindowRef.current = hasNewerWindow;
+  }, [hasNewerWindow]);
+  // Gửi tin hoặc đính kèm file khi đang xem tin cũ: quay về tin mới nhất trước, nếu không
+  // tin vừa gửi (đến qua socket) sẽ bị bỏ qua và người dùng không thấy đâu.
+  const returnToLatest = async () => {
+    if (!newerWindowRef.current) return;
+    setNewerWindowFor(null);
+    await queryClient.resetQueries({ queryKey: ["messages", id] });
+  };
   const [typingUserIds, setTypingUserIds] = useState<string[]>([]);
   const dragCounter = useRef(0);
   const lastMarkedReadId = useRef<string | null>(null);
@@ -134,12 +169,27 @@ export default function Conversation() {
   // phần tử #message-<id>) — tin gốc nằm ở trang cũ hơn chưa cuộn tới thì bỏ
   // qua lặng lẽ, không tự động fetch thêm (giới hạn chấp nhận được cho MVP,
   // giống cách MediaViewer không tự fetch thêm khi chạm biên trang đã tải).
-  const handleJumpToMessage = (messageId: string) => {
-    const el = document.getElementById(`message-${messageId}`);
-    if (!el) {
-      toast.info("Cuộn lên để xem tin nhắn gốc");
-      return;
+  // Dùng cho cả nút "Trả lời" lẫn kết quả tìm kiếm: nếu tin chưa tải thì tải thêm
+  // trang cũ hơn cho tới khi thấy (kết quả tìm kiếm có thể nằm rất xa).
+  const handleJumpToMessage = async (messageId: string) => {
+    if (!document.getElementById(`message-${messageId}`)) {
+      // Tin ngoài phạm vi đã tải: lấy cả cửa sổ quanh tin đó trong 1 request và thay cache
+      // bằng cửa sổ này — thời gian không phụ thuộc tin cách đây bao xa.
+      try {
+        const around = await getMessagesAround(id, messageId);
+        queryClient.setQueryData<InfiniteData<MessagesPage>>(["messages", id], {
+          pages: [{ items: around.items, nextCursor: around.nextCursor }],
+          pageParams: [undefined],
+        });
+        setNewerWindowFor(around.hasNewer ? id : null);
+      } catch {
+        toast.info("Không tìm thấy tin nhắn trong đoạn chat");
+        return;
+      }
     }
+    await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 50)));
+    const el = document.getElementById(`message-${messageId}`);
+    if (!el) return;
     el.scrollIntoView({ behavior: "smooth", block: "center" });
     setHighlightedId(messageId);
     window.setTimeout(() => {
@@ -191,7 +241,11 @@ export default function Conversation() {
 
     const onNew = (message: Message) => {
       if (message.conversationId !== id) return;
-      queryClient.setQueryData<MessagesCache>(["messages", id], (old) => prependMessage(old, message));
+      // Đang ở cửa sổ tin cũ: chèn vào đầu cache sẽ đặt tin sai chỗ (sau khoảng trống).
+      // Bỏ qua — bấm "Đến tin mới nhất" để tải lại đầy đủ.
+      if (!newerWindowRef.current) {
+        queryClient.setQueryData<MessagesCache>(["messages", id], (old) => prependMessage(old, message));
+      }
       if (message.sender.id !== myId) markReadIfNeeded(message.id);
     };
     const onRecalled = ({ messageId }: { messageId: string; conversationId: string }) => {
@@ -309,7 +363,10 @@ export default function Conversation() {
   }, [socket, id, queryClient, myId]);
 
   const sendMutation = useMutation({
-    mutationFn: (content: string) => sendTextMessage(id, content, replyTarget?.id),
+    mutationFn: async (content: string) => {
+      await returnToLatest();
+      return sendTextMessage(id, content, replyTarget?.id);
+    },
     onSuccess: () => setReplyTarget(null),
     // Không tự chèn vào cache — message:new sẽ tự đến qua socket (server
     // broadcast cho mọi member trong room, kể cả chính người gửi).
@@ -322,6 +379,7 @@ export default function Conversation() {
   const handleAttach = (file: File) => {
     const replyToId = replyTarget?.id;
     setReplyTarget(null);
+    void returnToLatest();
     useUploadStore.getState().startUpload(id, file, replyToId);
   };
 
@@ -414,18 +472,18 @@ export default function Conversation() {
       )}
 
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
-        <button
-          type="button"
-          aria-label="Thông tin hội thoại"
-          className="flex min-w-0 flex-1 items-center gap-3 text-left"
-          onClick={() => setInfoOpen(true)}
+        <HeaderIdentity
+          clickable={isDirect && !!otherMember}
+          onClick={() => {
+            if (otherMember) navigate(`/u/${otherMember.id}`, { state: { background: rootBackground(location) } });
+          }}
         >
           <UserAvatar name={title} src={detailQuery.data?.avatarUrl} online={isDirect && otherMember?.isOnline} />
           <div className="min-w-0">
             <p className="truncate font-medium text-foreground">{title}</p>
             {headerSubtitle && <p className="truncate text-xs text-muted-foreground">{headerSubtitle}</p>}
           </div>
-        </button>
+        </HeaderIdentity>
         {detailQuery.data && (
           <div className="flex items-center gap-1">
             <Button variant="ghost" size="icon" aria-label="Gọi thoại" onClick={() => void beginCall(id, "AUDIO")}>
@@ -433,6 +491,9 @@ export default function Conversation() {
             </Button>
             <Button variant="ghost" size="icon" aria-label="Gọi video" onClick={() => void beginCall(id, "VIDEO")}>
               <Video className="size-5" />
+            </Button>
+            <Button variant="ghost" size="icon" aria-label="Thông tin hội thoại" onClick={() => setInfoOpen(true)}>
+              <Info className="size-5" />
             </Button>
           </div>
         )}
@@ -451,7 +512,12 @@ export default function Conversation() {
         </div>
       )}
 
-      <ConversationInfoSheet conversationId={id} open={infoOpen} onOpenChange={setInfoOpen} />
+      <ConversationInfoSheet
+        conversationId={id}
+        open={infoOpen}
+        onOpenChange={setInfoOpen}
+        onJumpToMessage={(messageId) => void handleJumpToMessage(messageId)}
+      />
 
       <div className="relative flex-1 overflow-hidden">
         {detailQuery.data?.backgroundUrl && (
@@ -467,6 +533,20 @@ export default function Conversation() {
           <EmptyState icon={<MessageCircle className="size-10" />} title="Hãy bắt đầu trò chuyện" />
         ) : (
           <div className="relative flex h-full flex-col-reverse overflow-y-auto px-3 py-2">
+            {hasNewerWindow && (
+              <div className="flex justify-center py-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    setNewerWindowFor(null);
+                    void queryClient.resetQueries({ queryKey: ["messages", id] });
+                  }}
+                >
+                  Đến tin mới nhất
+                </Button>
+              </div>
+            )}
             {messages.map((item, index) => {
               const isOwn = item.sender.id === myId;
               const seen = isOwn && otherMember?.lastReadMessageId === item.id;

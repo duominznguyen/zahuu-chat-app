@@ -100,3 +100,35 @@ export function removeReaction(messageId: string) {
 export function markRead(conversationId: string, lastReadMessageId: string) {
   return apiClient.patch(`/conversations/${conversationId}/read`, { lastReadMessageId });
 }
+
+export interface SearchHit {
+  id: string;
+  content: string | null;
+  createdAt: string;
+  sender: PublicUser;
+}
+
+export interface SearchPage {
+  items: SearchHit[];
+  nextCursor: string | null;
+}
+
+export function searchMessages(conversationId: string, q: string, cursor?: string) {
+  const params = new URLSearchParams({ q });
+  if (cursor) params.set("cursor", cursor);
+  return apiClient.get<SearchPage>(`/conversations/${conversationId}/messages/search?${params}`);
+}
+
+export function listMediaMessages(conversationId: string, kind: "MEDIA" | "FILE", cursor?: string) {
+  const params = new URLSearchParams({ kind });
+  if (cursor) params.set("cursor", cursor);
+  return apiClient.get<MessagesPage>(`/conversations/${conversationId}/media?${params}`);
+}
+
+export interface AroundPage extends MessagesPage {
+  hasNewer: boolean;
+}
+
+export function getMessagesAround(conversationId: string, messageId: string) {
+  return apiClient.get<AroundPage>(`/conversations/${conversationId}/messages/around?messageId=${messageId}`);
+}

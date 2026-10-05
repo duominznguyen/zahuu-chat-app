@@ -1,6 +1,6 @@
 import { create } from "zustand";
 import { toast } from "sonner";
-import { messageTypeForFile, uploadMedia } from "@/lib/media";
+import { messageTypeForFile, uploadMedia, zipForUpload } from "@/lib/media";
 import { sendMediaMessage } from "@/lib/messages";
 
 interface UploadState {
@@ -19,13 +19,16 @@ interface UploadStoreState {
 
 export const useUploadStore = create<UploadStoreState>((set) => ({
   uploads: {},
-  startUpload: (conversationId, file, replyToId) => {
-    const type = messageTypeForFile(file);
-    set((s) => ({ uploads: { ...s.uploads, [conversationId]: { label: file.name, progress: 0 } } }));
+  startUpload: (conversationId, original, replyToId) => {
+    const type = messageTypeForFile(original);
+    set((s) => ({ uploads: { ...s.uploads, [conversationId]: { label: original.name, progress: 0 } } }));
 
-    uploadMedia(file, "MESSAGE", (progress) => {
-      set((s) => ({ uploads: { ...s.uploads, [conversationId]: { label: file.name, progress } } }));
-    })
+    zipForUpload(original)
+      .then((file) =>
+        uploadMedia(file, "MESSAGE", (progress) => {
+          set((s) => ({ uploads: { ...s.uploads, [conversationId]: { label: original.name, progress } } }));
+        }),
+      )
       .then((uploaded) =>
         sendMediaMessage(conversationId, type, uploaded.url, uploaded.publicId, {
           mediaName: type === "FILE" ? uploaded.originalName : undefined,
