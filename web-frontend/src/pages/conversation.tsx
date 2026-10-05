@@ -5,6 +5,7 @@ import { useEffect, useRef, useState, type DragEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ChatInput } from "@/components/chat-input";
+import { ConversationInfoSheet } from "@/components/conversation-info-sheet";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
 import { InfiniteScrollSentinel } from "@/components/infinite-scroll-sentinel";
@@ -12,6 +13,7 @@ import { MediaViewer } from "@/components/media-viewer";
 import { MessageBubble } from "@/components/message-bubble";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
+import { ApiError } from "@/lib/api-client";
 import { confirm } from "@/lib/confirm";
 import { getConversationDetail, type ConversationDetail } from "@/lib/conversations";
 import { downloadFile } from "@/lib/media";
@@ -107,6 +109,7 @@ export default function Conversation() {
 
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
   const [viewerMessageId, setViewerMessageId] = useState<string | null>(null);
+  const [infoOpen, setInfoOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
   const dragCounter = useRef(0);
@@ -135,6 +138,17 @@ export default function Conversation() {
     queryKey: ["conversations", "detail", id],
     queryFn: () => getConversationDetail(id),
   });
+
+  // Vào thẳng URL 1 hội thoại không còn là thành viên (vd đã bị xóa/rời/giải
+  // tán, hoặc tab cũ còn mở sau khi việc đó xảy ra) trả 404 — không xử lý sẽ
+  // kẹt lại màn trống (tiêu đề "...", không tin nhắn) thay vì quay về danh
+  // sách như lúc nhận được đúng sự kiện qua socket (xem onMemberRemoved).
+  useEffect(() => {
+    if (detailQuery.error instanceof ApiError && detailQuery.error.status === 404) {
+      toast.info("Hội thoại này không còn khả dụng");
+      navigate("/chat");
+    }
+  }, [detailQuery.error, navigate]);
 
   const messagesQuery = useInfiniteQuery({
     queryKey: ["messages", id],
@@ -338,13 +352,16 @@ export default function Conversation() {
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         <button
           type="button"
+          aria-label="Thông tin hội thoại"
           className="flex min-w-0 flex-1 items-center gap-3 text-left"
-          onClick={() => toast("Thông tin hội thoại sẽ có ở milestone sau")}
+          onClick={() => setInfoOpen(true)}
         >
           <UserAvatar name={title} src={detailQuery.data?.avatarUrl} />
           <span className="truncate font-medium text-foreground">{title}</span>
         </button>
       </div>
+
+      <ConversationInfoSheet conversationId={id} open={infoOpen} onOpenChange={setInfoOpen} />
 
       <div className="relative flex-1 overflow-hidden">
         {detailQuery.data?.backgroundUrl && (

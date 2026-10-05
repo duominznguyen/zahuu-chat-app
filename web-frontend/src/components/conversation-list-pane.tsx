@@ -1,4 +1,5 @@
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
+import { Plus } from "lucide-react";
 import { useEffect } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
 import { EmptyState } from "@/components/empty-state";
@@ -6,6 +7,7 @@ import { ErrorState } from "@/components/error-state";
 import { InfiniteScrollSentinel } from "@/components/infinite-scroll-sentinel";
 import { ListRow } from "@/components/list-row";
 import { UserAvatar } from "@/components/user-avatar";
+import { Button } from "@/components/ui/button";
 import { formatRelativeTime } from "@/lib/format-time";
 import { listConversations, type ConversationSummary } from "@/lib/conversations";
 import { useSocket } from "@/providers/socket-provider";
@@ -66,8 +68,16 @@ export function ConversationListPane() {
 
   return (
     <div className="flex h-full flex-col">
-      <div className="border-b border-border p-4">
+      <div className="flex items-center justify-between border-b border-border p-4">
         <h2 className="text-lg font-semibold text-foreground">Tin nhắn</h2>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          aria-label="Tạo nhóm"
+          onClick={() => navigate("/create-group", { state: { background: location } })}
+        >
+          <Plus />
+        </Button>
       </div>
       <div className="flex-1 overflow-y-auto">
         {query.isLoading ? null : query.isError ? (
