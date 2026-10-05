@@ -99,6 +99,15 @@ function prependMessage(data: MessagesCache | undefined, message: Message): Mess
   return { ...data, pages };
 }
 
+const TYPING_EXPIRE_MS = 5000;
+
+function typingLabel(isDirect: boolean, names: string[]): string {
+  if (isDirect) return "Đang nhập...";
+  if (names.length === 1) return `${names[0]} đang nhập...`;
+  if (names.length === 2) return `${names[0]}, ${names[1]} đang nhập...`;
+  return `${names[0]} và ${names.length - 1} người khác đang nhập...`;
+}
+
 export default function Conversation() {
   const { conversationId } = useParams<{ conversationId: string }>();
   const id = conversationId!;
@@ -112,8 +121,10 @@ export default function Conversation() {
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const [typingUserIds, setTypingUserIds] = useState<string[]>([]);
   const dragCounter = useRef(0);
   const lastMarkedReadId = useRef<string | null>(null);
+  const typingTimeouts = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
   const upload = useUploadStore((s) => s.uploads[id]);
 
   // Bấm vào quote "Trả lời" trong 1 bubble -> cuộn tới đúng tin gốc + flash
@@ -211,6 +222,35 @@ export default function Conversation() {
         };
       });
     };
+    const onPresence = ({ userId, isOnline }: { userId: string; isOnline: boolean }) => {
+      queryClient.setQueryData<ConversationDetail>(["conversations", "detail", id], (old) => {
+        if (!old || !old.members.some((m) => m.id === userId)) return old;
+        return { ...old, members: old.members.map((m) => (m.id === userId ? { ...m, isOnline } : m)) };
+      });
+    };
+    const timeouts = typingTimeouts.current;
+    const onTyping = ({ conversationId: cid, userId }: { conversationId: string; userId: string }) => {
+      if (cid !== id || userId === myId) return;
+      const existing = timeouts.get(userId);
+      if (existing) clearTimeout(existing);
+      timeouts.set(
+        userId,
+        setTimeout(() => {
+          timeouts.delete(userId);
+          setTypingUserIds((ids) => ids.filter((i) => i !== userId));
+        }, TYPING_EXPIRE_MS),
+      );
+      setTypingUserIds((ids) => (ids.includes(userId) ? ids : [...ids, userId]));
+    };
+    const onStopTyping = ({ conversationId: cid, userId }: { conversationId: string; userId: string }) => {
+      if (cid !== id) return;
+      const existing = timeouts.get(userId);
+      if (existing) {
+        clearTimeout(existing);
+        timeouts.delete(userId);
+      }
+      setTypingUserIds((ids) => ids.filter((i) => i !== userId));
+    };
     const onGroupUpdated = ({ conversationId: cid }: { conversationId: string }) => {
       if (cid !== id) return;
       queryClient.invalidateQueries({ queryKey: ["conversations", "detail", id] });
@@ -237,6 +277,9 @@ export default function Conversation() {
     socket.on("message:recalled", onRecalled);
     socket.on("message:reaction", onReaction);
     socket.on("message:read", onRead);
+    socket.on("presence:update", onPresence);
+    socket.on("message:typing", onTyping);
+    socket.on("message:stopTyping", onStopTyping);
     socket.on("group:updated", onGroupUpdated);
     socket.on("group:memberAdded", onGroupUpdated);
     socket.on("group:memberRemoved", onMemberRemoved);
@@ -245,9 +288,18 @@ export default function Conversation() {
       socket.off("message:recalled", onRecalled);
       socket.off("message:reaction", onReaction);
       socket.off("message:read", onRead);
+      socket.off("presence:update", onPresence);
+      socket.off("message:typing", onTyping);
+      socket.off("message:stopTyping", onStopTyping);
       socket.off("group:updated", onGroupUpdated);
       socket.off("group:memberAdded", onGroupUpdated);
       socket.off("group:memberRemoved", onMemberRemoved);
+      // Báo ngừng gõ NGAY lúc rời màn (không đợi hết 5s dự phòng) để đối
+      // phương không bị kẹt thấy "đang nhập" dù mình đã rời màn.
+      socket.emit("message:stopTyping", { conversationId: id });
+      for (const t of timeouts.values()) clearTimeout(t);
+      timeouts.clear();
+      setTypingUserIds([]);
     };
     // Không emit conversation:leave lúc unmount — socket dùng chung toàn app,
     // rời room sẽ làm List Pane mất luôn update real-time của chính room này.
@@ -325,6 +377,11 @@ export default function Conversation() {
   const isDirect = detailQuery.data?.type === "DIRECT";
   const otherMember = isDirect ? detailQuery.data?.members.find((m) => m.id !== myId) : undefined;
   const title = detailQuery.data?.name ?? "...";
+  const headerSubtitle = isDirect && otherMember?.isOnline ? "Đang hoạt động" : undefined;
+
+  const typingNames = typingUserIds.map(
+    (uid) => detailQuery.data?.members.find((m) => m.id === uid)?.displayName ?? "Ai đó",
+  );
 
   // Danh sách ảnh/video cho MediaViewer điều hướng Trước/Sau bằng phím mũi
   // tên — chỉ trong phạm vi tin ĐÃ TẢI (không tự fetch thêm khi chạm biên),
@@ -356,8 +413,11 @@ export default function Conversation() {
           className="flex min-w-0 flex-1 items-center gap-3 text-left"
           onClick={() => setInfoOpen(true)}
         >
-          <UserAvatar name={title} src={detailQuery.data?.avatarUrl} />
-          <span className="truncate font-medium text-foreground">{title}</span>
+          <UserAvatar name={title} src={detailQuery.data?.avatarUrl} online={isDirect && otherMember?.isOnline} />
+          <div className="min-w-0">
+            <p className="truncate font-medium text-foreground">{title}</p>
+            {headerSubtitle && <p className="truncate text-xs text-muted-foreground">{headerSubtitle}</p>}
+          </div>
         </button>
       </div>
 
@@ -456,7 +516,19 @@ export default function Conversation() {
         </div>
       )}
 
-      <ChatInput onSend={(text) => sendMutation.mutate(text)} onAttach={handleAttach} />
+      {typingNames.length > 0 && (
+        <div className="border-t border-border bg-background px-4 py-1.5">
+          <p className="text-xs text-muted-foreground">{typingLabel(!!isDirect, typingNames)}</p>
+        </div>
+      )}
+
+      <ChatInput
+        onSend={(text) => sendMutation.mutate(text)}
+        onAttach={handleAttach}
+        onTypingChange={(isTyping) => {
+          socket?.emit(isTyping ? "message:typing" : "message:stopTyping", { conversationId: id });
+        }}
+      />
 
       {viewerMessageId && (
         <MediaViewer

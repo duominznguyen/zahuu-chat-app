@@ -1,3 +1,4 @@
+import type { InfiniteData } from "@tanstack/react-query";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import { Plus } from "lucide-react";
 import { useEffect } from "react";
@@ -9,9 +10,32 @@ import { ListRow } from "@/components/list-row";
 import { UserAvatar } from "@/components/user-avatar";
 import { Button } from "@/components/ui/button";
 import { formatRelativeTime } from "@/lib/format-time";
-import { listConversations, type ConversationSummary } from "@/lib/conversations";
+import {
+  listConversations,
+  type ConversationSummary,
+  type ConversationsPage,
+} from "@/lib/conversations";
 import { useSocket } from "@/providers/socket-provider";
 import { useAuthStore } from "@/store/auth-store";
+
+type ConversationsCache = InfiniteData<ConversationsPage, string | undefined>;
+
+function patchOnlineStatus(
+  data: ConversationsCache | undefined,
+  userId: string,
+  isOnline: boolean,
+): ConversationsCache | undefined {
+  if (!data) return data;
+  return {
+    ...data,
+    pages: data.pages.map((page) => ({
+      ...page,
+      items: page.items.map((c) =>
+        c.otherUser?.id === userId ? { ...c, otherUser: { ...c.otherUser, isOnline } } : c,
+      ),
+    })),
+  };
+}
 
 const MEDIA_LABEL: Record<string, string> = {
   IMAGE: "ảnh",
@@ -58,12 +82,22 @@ export function ConversationListPane() {
     socket.on("group:memberAdded", refetch);
     socket.on("group:memberRemoved", refetch);
     socket.on("group:updated", refetch);
+    // Vá trực tiếp thay vì invalidate+refetch — presence đổi liên tục hơn
+    // nhiều so với các event khác ở trên, refetch cả list mỗi lần online/
+    // offline sẽ quá phí trong khi chỉ đổi đúng 1 field nhỏ của 1 item.
+    const onPresence = ({ userId, isOnline }: { userId: string; isOnline: boolean }) => {
+      queryClient.setQueryData<ConversationsCache>(["conversations", "list"], (old) =>
+        patchOnlineStatus(old, userId, isOnline),
+      );
+    };
+    socket.on("presence:update", onPresence);
     return () => {
       socket.off("message:new", refetch);
       socket.off("message:recalled", refetch);
       socket.off("group:memberAdded", refetch);
       socket.off("group:memberRemoved", refetch);
       socket.off("group:updated", refetch);
+      socket.off("presence:update", onPresence);
     };
   }, [socket, queryClient]);
 
@@ -92,7 +126,9 @@ export function ConversationListPane() {
             {items.map((item) => (
               <ListRow
                 key={item.id}
-                leading={<UserAvatar name={item.name ?? "?"} src={item.avatarUrl} />}
+                leading={
+                  <UserAvatar name={item.name ?? "?"} src={item.avatarUrl} online={item.otherUser?.isOnline} />
+                }
                 title={item.name ?? "Người dùng đã xóa"}
                 subtitle={previewText(item, myId)}
                 emphasized={item.unread}

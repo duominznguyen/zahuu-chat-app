@@ -6,12 +6,16 @@ import { ACCEPTED_MEDIA_TYPES } from "@/lib/media";
 interface ChatInputProps {
   onSend: (text: string) => void;
   onAttach: (file: File) => void;
+  onTypingChange?: (isTyping: boolean) => void;
 }
 
-export function ChatInput({ onSend, onAttach }: ChatInputProps) {
+const TYPING_STOP_DELAY_MS = 2000;
+
+export function ChatInput({ onSend, onAttach, onTypingChange }: ChatInputProps) {
   const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const stopTypingTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const resize = () => {
     const el = textareaRef.current;
@@ -26,6 +30,8 @@ export function ChatInput({ onSend, onAttach }: ChatInputProps) {
     onSend(trimmed);
     setText("");
     requestAnimationFrame(resize);
+    if (stopTypingTimeout.current) clearTimeout(stopTypingTimeout.current);
+    onTypingChange?.(false);
   };
 
   // Enter gửi, Shift+Enter xuống dòng — isComposing true nghĩa là Enter đang
@@ -60,6 +66,9 @@ export function ChatInput({ onSend, onAttach }: ChatInputProps) {
         onChange={(e) => {
           setText(e.target.value);
           resize();
+          onTypingChange?.(true);
+          if (stopTypingTimeout.current) clearTimeout(stopTypingTimeout.current);
+          stopTypingTimeout.current = setTimeout(() => onTypingChange?.(false), TYPING_STOP_DELAY_MS);
         }}
         onKeyDown={handleKeyDown}
         placeholder="Nhập tin nhắn..."
