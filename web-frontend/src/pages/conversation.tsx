@@ -1,18 +1,20 @@
 import type { InfiniteData } from "@tanstack/react-query";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { MessageCircle, X } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type DragEvent } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import { toast } from "sonner";
 import { ChatInput } from "@/components/chat-input";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
 import { InfiniteScrollSentinel } from "@/components/infinite-scroll-sentinel";
+import { MediaViewer } from "@/components/media-viewer";
 import { MessageBubble } from "@/components/message-bubble";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
 import { confirm } from "@/lib/confirm";
 import { getConversationDetail, type ConversationDetail } from "@/lib/conversations";
+import { downloadFile } from "@/lib/media";
 import {
   deleteMessageForMe,
   listMessages,
@@ -25,8 +27,10 @@ import {
   type MessagesPage,
   type ReactionType,
 } from "@/lib/messages";
+import { replyPreviewLabel } from "@/lib/reply-preview";
 import { useSocket } from "@/providers/socket-provider";
 import { useAuthStore } from "@/store/auth-store";
+import { useUploadStore } from "@/store/upload-store";
 
 type MessagesCache = InfiniteData<MessagesPage, string | undefined>;
 
@@ -102,7 +106,30 @@ export default function Conversation() {
   const myId = useAuthStore((s) => s.user?.id);
 
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
+  const [viewerMessageId, setViewerMessageId] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+  const dragCounter = useRef(0);
   const lastMarkedReadId = useRef<string | null>(null);
+  const upload = useUploadStore((s) => s.uploads[id]);
+
+  // Bấm vào quote "Trả lời" trong 1 bubble -> cuộn tới đúng tin gốc + flash
+  // highlight ngắn. Chỉ hoạt động trong phạm vi tin ĐÃ TẢI (DOM phải có sẵn
+  // phần tử #message-<id>) — tin gốc nằm ở trang cũ hơn chưa cuộn tới thì bỏ
+  // qua lặng lẽ, không tự động fetch thêm (giới hạn chấp nhận được cho MVP,
+  // giống cách MediaViewer không tự fetch thêm khi chạm biên trang đã tải).
+  const handleJumpToMessage = (messageId: string) => {
+    const el = document.getElementById(`message-${messageId}`);
+    if (!el) {
+      toast.info("Cuộn lên để xem tin nhắn gốc");
+      return;
+    }
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedId(messageId);
+    window.setTimeout(() => {
+      setHighlightedId((current) => (current === messageId ? null : current));
+    }, 1500);
+  };
 
   const detailQuery = useQuery({
     queryKey: ["conversations", "detail", id],
@@ -221,6 +248,46 @@ export default function Conversation() {
     onError: () => toast.error("Gửi tin nhắn thất bại, vui lòng thử lại"),
   });
 
+  // Xóa reply target NGAY lúc đính kèm (không đợi upload xong) — upload chạy
+  // trong store toàn cục, sống độc lập với component này, nên không có móc
+  // nối "onSuccess" nào ở đây để tự xóa đúng lúc như sendMutation phía trên.
+  const handleAttach = (file: File) => {
+    const replyToId = replyTarget?.id;
+    setReplyTarget(null);
+    useUploadStore.getState().startUpload(id, file, replyToId);
+  };
+
+  // Kéo-thả PHẢI preventDefault() trên dragover (không chỉ drop) ở cấp
+  // window — thiếu bước này, thả file ra ngoài đúng vùng chat sẽ bị trình
+  // duyệt tự mở file đó thành trang mới, mất hẳn nội dung app đang xem.
+  useEffect(() => {
+    const prevent = (e: Event) => e.preventDefault();
+    window.addEventListener("dragover", prevent);
+    window.addEventListener("drop", prevent);
+    return () => {
+      window.removeEventListener("dragover", prevent);
+      window.removeEventListener("drop", prevent);
+    };
+  }, []);
+
+  const handleDragEnter = (e: DragEvent) => {
+    e.preventDefault();
+    dragCounter.current += 1;
+    setDragOver(true);
+  };
+  const handleDragLeave = (e: DragEvent) => {
+    e.preventDefault();
+    dragCounter.current -= 1;
+    if (dragCounter.current <= 0) setDragOver(false);
+  };
+  const handleDrop = (e: DragEvent) => {
+    e.preventDefault();
+    dragCounter.current = 0;
+    setDragOver(false);
+    const file = e.dataTransfer.files?.[0];
+    if (file) handleAttach(file);
+  };
+
   const recallMutation = useMutation({ mutationFn: (messageId: string) => recallMessage(messageId) });
 
   const deleteMutation = useMutation({
@@ -245,8 +312,29 @@ export default function Conversation() {
   const otherMember = isDirect ? detailQuery.data?.members.find((m) => m.id !== myId) : undefined;
   const title = detailQuery.data?.name ?? "...";
 
+  // Danh sách ảnh/video cho MediaViewer điều hướng Trước/Sau bằng phím mũi
+  // tên — chỉ trong phạm vi tin ĐÃ TẢI (không tự fetch thêm khi chạm biên),
+  // giữ nguyên thứ tự mới nhất trước của `messages`.
+  const mediaItems = messages
+    .filter((m) => (m.type === "IMAGE" || m.type === "VIDEO") && !m.isRecalled && m.mediaUrl)
+    .map((m) => ({ id: m.id, url: m.mediaUrl!, type: m.type as "IMAGE" | "VIDEO" }));
+
   return (
-    <div className="flex h-full flex-col bg-background">
+    <div
+      className="relative flex h-full flex-col bg-background"
+      onDragEnter={handleDragEnter}
+      onDragOver={(e) => e.preventDefault()}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-4 border-dashed border-primary bg-primary/10">
+          <p className="rounded-xl bg-background px-4 py-2 font-medium text-foreground shadow">
+            Thả file để gửi
+          </p>
+        </div>
+      )}
+
       <div className="flex items-center gap-3 border-b border-border px-4 py-3">
         <button
           type="button"
@@ -295,6 +383,7 @@ export default function Conversation() {
                   showAvatar={showAvatar}
                   showSenderName={showSenderName}
                   seen={!!seen}
+                  isHighlighted={highlightedId === item.id}
                   myReaction={myReaction}
                   onReply={() => setReplyTarget(item)}
                   onReact={(type) => reactMutation.mutate({ messageId: item.id, reactionType: type })}
@@ -308,6 +397,9 @@ export default function Conversation() {
                     if (ok) recallMutation.mutate(item.id);
                   }}
                   onDelete={() => deleteMutation.mutate(item.id)}
+                  onOpenMedia={() => setViewerMessageId(item.id)}
+                  onDownloadFile={() => downloadFile(item.mediaUrl!, item.mediaName ?? undefined)}
+                  onJumpToMessage={handleJumpToMessage}
                 />
               );
             })}
@@ -319,10 +411,21 @@ export default function Conversation() {
         )}
       </div>
 
+      {upload && (
+        <div className="border-t border-border bg-secondary px-4 py-2">
+          <p className="truncate text-sm text-muted-foreground">
+            Đang gửi {upload.label}... {upload.progress}%
+          </p>
+          <div className="mt-1.5 h-1.5 overflow-hidden rounded-full bg-border">
+            <div className="h-full rounded-full bg-primary" style={{ width: `${upload.progress}%` }} />
+          </div>
+        </div>
+      )}
+
       {replyTarget && (
         <div className="flex items-center justify-between border-t border-border bg-secondary px-4 py-2">
           <p className="min-w-0 flex-1 truncate text-sm text-muted-foreground">
-            Trả lời: {replyTarget.isRecalled ? "Tin nhắn đã thu hồi" : replyTarget.content}
+            Trả lời: {replyPreviewLabel(replyTarget)}
           </p>
           <Button variant="ghost" size="icon-sm" aria-label="Hủy trả lời" onClick={() => setReplyTarget(null)}>
             <X />
@@ -330,7 +433,16 @@ export default function Conversation() {
         </div>
       )}
 
-      <ChatInput onSend={(text) => sendMutation.mutate(text)} />
+      <ChatInput onSend={(text) => sendMutation.mutate(text)} onAttach={handleAttach} />
+
+      {viewerMessageId && (
+        <MediaViewer
+          items={mediaItems}
+          currentId={viewerMessageId}
+          onClose={() => setViewerMessageId(null)}
+          onNavigate={setViewerMessageId}
+        />
+      )}
     </div>
   );
 }

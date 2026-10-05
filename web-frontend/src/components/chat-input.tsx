@@ -1,15 +1,17 @@
 import { Paperclip, Send } from "lucide-react";
 import { useRef, useState, type KeyboardEvent } from "react";
-import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
+import { ACCEPTED_MEDIA_TYPES } from "@/lib/media";
 
 interface ChatInputProps {
   onSend: (text: string) => void;
+  onAttach: (file: File) => void;
 }
 
-export function ChatInput({ onSend }: ChatInputProps) {
+export function ChatInput({ onSend, onAttach }: ChatInputProps) {
   const [text, setText] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const resize = () => {
     const el = textareaRef.current;
@@ -38,12 +40,18 @@ export function ChatInput({ onSend }: ChatInputProps) {
 
   return (
     <div className="flex items-end gap-2 border-t border-border bg-background px-3 py-2">
-      <Button
-        variant="ghost"
-        size="icon"
-        aria-label="Đính kèm"
-        onClick={() => toast("Gửi ảnh/file sẽ có ở milestone sau")}
-      >
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept={ACCEPTED_MEDIA_TYPES}
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) onAttach(file);
+          e.target.value = ""; // reset để chọn lại đúng file cũ vẫn bắn onChange
+        }}
+      />
+      <Button variant="ghost" size="icon" aria-label="Đính kèm" onClick={() => fileInputRef.current?.click()}>
         <Paperclip />
       </Button>
       <textarea
@@ -58,12 +66,7 @@ export function ChatInput({ onSend }: ChatInputProps) {
         rows={1}
         className="max-h-32 flex-1 resize-none rounded-2xl bg-secondary px-4 py-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground"
       />
-      <Button
-        size="icon"
-        aria-label="Gửi"
-        disabled={!text.trim()}
-        onClick={handleSend}
-      >
+      <Button size="icon" aria-label="Gửi" disabled={!text.trim()} onClick={handleSend}>
         <Send />
       </Button>
     </div>

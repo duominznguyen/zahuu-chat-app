@@ -1,6 +1,7 @@
-import { CornerUpLeft, Copy, MoreHorizontal, Trash2, Undo2 } from "lucide-react";
+import { CornerUpLeft, Copy, FileText, MoreHorizontal, Trash2, Undo2 } from "lucide-react";
 import { useState } from "react";
 import { toast } from "sonner";
+import { MediaPreview } from "@/components/media-preview";
 import { UserAvatar } from "@/components/user-avatar";
 import { Button } from "@/components/ui/button";
 import {
@@ -10,7 +11,9 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import { formatBytes } from "@/lib/media";
 import type { Message, ReactionType } from "@/lib/messages";
+import { replyPreviewLabel } from "@/lib/reply-preview";
 
 const REACTIONS: ReactionType[] = ["like", "love", "haha", "wow", "sad", "angry"];
 const REACTION_EMOJI: Record<ReactionType, string> = {
@@ -62,18 +65,46 @@ function copyText(content: string | null) {
   toast.success("Đã sao chép");
 }
 
+// Dùng chung cho cả 2 chỗ hiện quote trả lời (trong bubble màu, và phía trên
+// MediaPreview) — thumbnail nhỏ cho IMAGE/VIDEO (mediaUrl có sẵn từ W-fix
+// backend bổ sung field này vào replyTo), các loại khác chỉ hiện nhãn/text.
+function ReplyQuoteContent({
+  replyTo,
+  textClassName,
+}: {
+  replyTo: NonNullable<Message["replyTo"]>;
+  textClassName: string;
+}) {
+  const showThumb = !replyTo.isRecalled && replyTo.mediaUrl && (replyTo.type === "IMAGE" || replyTo.type === "VIDEO");
+  return (
+    <div className="flex min-w-0 items-center gap-1.5">
+      {showThumb &&
+        (replyTo.type === "IMAGE" ? (
+          <img src={replyTo.mediaUrl!} alt="" className="size-7 shrink-0 rounded object-cover" />
+        ) : (
+          <video src={replyTo.mediaUrl!} muted preload="metadata" className="size-7 shrink-0 rounded object-cover" />
+        ))}
+      <p className={`truncate text-xs ${textClassName}`}>{replyPreviewLabel(replyTo)}</p>
+    </div>
+  );
+}
+
 interface MessageBubbleProps {
   message: Message;
   isOwn: boolean;
   showAvatar: boolean;
   showSenderName: boolean;
   seen: boolean;
+  isHighlighted: boolean;
   myReaction?: ReactionType;
   onReply: () => void;
   onReact: (type: ReactionType) => void;
   onRemoveReaction: () => void;
   onRecall: () => void;
   onDelete: () => void;
+  onOpenMedia: () => void;
+  onDownloadFile: () => void;
+  onJumpToMessage: (messageId: string) => void;
 }
 
 export function MessageBubble({
@@ -82,12 +113,16 @@ export function MessageBubble({
   showAvatar,
   showSenderName,
   seen,
+  isHighlighted,
   myReaction,
   onReply,
   onReact,
   onRemoveReaction,
   onRecall,
   onDelete,
+  onOpenMedia,
+  onDownloadFile,
+  onJumpToMessage,
 }: MessageBubbleProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const isRecalled = message.isRecalled;
@@ -132,7 +167,7 @@ export function MessageBubble({
   );
 
   return (
-    <div className={clusterMarginClass(showAvatar)}>
+    <div id={`message-${message.id}`} className={clusterMarginClass(showAvatar)}>
       {!isOwn && showSenderName && (
         <p className="mb-0.5 ml-9 text-xs font-medium text-muted-foreground">
           {message.sender.displayName}
@@ -148,28 +183,63 @@ export function MessageBubble({
 
         {isOwn && menuButton}
 
-        <div className="relative max-w-[65%]">
+        <div
+          // Ring thay vì tô nền — bubble TEXT/FILE có nền ĐẶC (bg-primary/bg-secondary)
+          // phủ kín, tô nền ở wrapper ngoài sẽ bị che hoàn toàn, không thấy
+          // hiệu ứng gì khi highlight; ring nằm NGOÀI border box nên luôn hiện
+          // được bất kể độ trong suốt của nội dung bên trong.
+          className={`relative max-w-[65%] rounded-2xl transition-shadow duration-500 ${isHighlighted ? "ring-2 ring-primary ring-offset-2 ring-offset-background" : ""}`}
+        >
           {isRecalled ? (
             <div className="rounded-2xl bg-secondary px-4 py-2.5">
               <p className="text-sm italic text-muted-foreground">Tin nhắn đã thu hồi</p>
             </div>
+          ) : message.type === "IMAGE" || message.type === "VIDEO" ? (
+            message.mediaUrl && (
+              <>
+                {message.replyTo && (
+                  <button
+                    type="button"
+                    onClick={() => onJumpToMessage(message.replyTo!.id)}
+                    className="mb-1.5 w-full rounded-lg border-l-2 border-muted-foreground/50 bg-secondary px-2 py-1 text-left hover:bg-accent"
+                  >
+                    <ReplyQuoteContent replyTo={message.replyTo} textClassName="text-muted-foreground" />
+                  </button>
+                )}
+                <MediaPreview url={message.mediaUrl} isVideo={message.type === "VIDEO"} onClick={onOpenMedia} />
+              </>
+            )
           ) : (
             <div className={`rounded-2xl px-4 py-2.5 ${bubbleColor}`}>
               {message.replyTo && (
-                <div
-                  className={`mb-1.5 border-l-2 pl-2 ${isOwn ? "border-primary-foreground/50" : "border-muted-foreground/50"}`}
+                <button
+                  type="button"
+                  onClick={() => onJumpToMessage(message.replyTo!.id)}
+                  className={`mb-1.5 w-full border-l-2 pl-2 text-left hover:opacity-80 ${isOwn ? "border-primary-foreground/50" : "border-muted-foreground/50"}`}
                 >
-                  <p
-                    className={`truncate text-xs ${isOwn ? "text-primary-foreground/80" : "text-muted-foreground"}`}
-                  >
-                    {message.replyTo.isRecalled ? "Tin nhắn đã thu hồi" : message.replyTo.content}
-                  </p>
-                </div>
+                  <ReplyQuoteContent
+                    replyTo={message.replyTo}
+                    textClassName={isOwn ? "text-primary-foreground/80" : "text-muted-foreground"}
+                  />
+                </button>
               )}
               {message.type === "TEXT" && message.content && (
                 <p className="whitespace-pre-wrap text-sm">
                   <LinkifiedText content={message.content} />
                 </p>
+              )}
+              {message.type === "FILE" && (
+                <button type="button" onClick={onDownloadFile} className="flex items-center gap-2 text-left">
+                  <FileText className="size-7 shrink-0" />
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-medium">{message.mediaName ?? "File"}</p>
+                    {message.mediaSize != null && (
+                      <p className={`text-xs ${isOwn ? "text-primary-foreground/70" : "text-muted-foreground"}`}>
+                        {formatBytes(message.mediaSize)}
+                      </p>
+                    )}
+                  </div>
+                </button>
               )}
             </div>
           )}

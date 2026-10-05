@@ -9,6 +9,8 @@ export interface ReplyToPreview {
   senderId: string;
   type: MessageType;
   content: string | null;
+  mediaUrl: string | null;
+  mediaName: string | null;
   isRecalled: boolean;
 }
 
@@ -44,6 +46,29 @@ export function sendTextMessage(conversationId: string, content: string, replyTo
     type: "TEXT",
     content,
     replyToId,
+  });
+}
+
+interface SendMediaOptions {
+  mediaName?: string;
+  mediaSize?: number;
+  replyToId?: string;
+}
+
+export function sendMediaMessage(
+  conversationId: string,
+  type: "IMAGE" | "VIDEO" | "FILE",
+  mediaUrl: string,
+  mediaPublicId: string,
+  options?: SendMediaOptions,
+) {
+  return apiClient.post<Message>(`/conversations/${conversationId}/messages`, {
+    type,
+    mediaUrl,
+    mediaPublicId,
+    mediaName: options?.mediaName,
+    mediaSize: options?.mediaSize,
+    replyToId: options?.replyToId,
   });
 }
 

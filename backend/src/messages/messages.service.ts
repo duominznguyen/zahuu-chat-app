@@ -29,6 +29,8 @@ const replyToSelect = {
   senderId: true,
   type: true,
   content: true,
+  mediaUrl: true,
+  mediaName: true,
   isRecalled: true,
 } as const;
 
@@ -67,6 +69,8 @@ type MessageWithRelations = {
     senderId: string;
     type: MessageType;
     content: string | null;
+    mediaUrl: string | null;
+    mediaName: string | null;
     isRecalled: boolean;
   } | null;
 };
@@ -338,6 +342,8 @@ export class MessagesService {
             senderId: m.replyTo.senderId,
             type: m.replyTo.type,
             content: m.replyTo.isRecalled ? null : m.replyTo.content,
+            mediaUrl: m.replyTo.isRecalled ? null : m.replyTo.mediaUrl,
+            mediaName: m.replyTo.isRecalled ? null : m.replyTo.mediaName,
             isRecalled: m.replyTo.isRecalled,
           }
         : null,
