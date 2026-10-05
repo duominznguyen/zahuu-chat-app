@@ -2,6 +2,7 @@ import { useAuthStore, type AuthUser } from "@/store/auth-store";
 import { apiClient } from "./api-client";
 import { clearSession } from "./clear-session";
 import { signInWithGoogle } from "./google-auth";
+import { getCurrentFcmToken } from "./web-push";
 import { refreshSession, startRefreshTimer } from "./token-refresh";
 
 interface SessionResponse {
@@ -86,7 +87,10 @@ export async function resetPassword(email: string, otp: string, newPassword: str
 
 export async function logout() {
   try {
-    await apiClient.post("/auth/logout");
+    // Backend xoá DeviceToken của trình duyệt này cùng lúc revoke refresh token —
+    // phải lấy token TRƯỚC khi clearSession() vì sau đó không còn gì để đọc.
+    const fcmToken = await getCurrentFcmToken().catch(() => null);
+    await apiClient.post("/auth/logout", fcmToken ? { fcmToken } : undefined);
   } catch {
     // Vẫn đăng xuất phía client dù gọi API lỗi (vd mất mạng) — không để người
     // dùng bị kẹt không thoát được tài khoản chỉ vì request logout thất bại.
