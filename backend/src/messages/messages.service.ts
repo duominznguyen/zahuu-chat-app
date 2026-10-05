@@ -18,7 +18,9 @@ import type { MediaCleanupJob } from '../media/media-cleanup.processor.js';
 import { MediaPurpose } from '../media/media-purpose.enum.js';
 import { MediaService } from '../media/media.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
+import type { ListMediaDto } from './dto/list-media.dto.js';
 import type { ListMessagesDto } from './dto/list-messages.dto.js';
+import type { SearchMessagesDto } from './dto/search-messages.dto.js';
 import type { SendMessageDto } from './dto/send-message.dto.js';
 
 const publicUserSelect = {
@@ -63,6 +65,7 @@ const NON_INTERACTIVE_TYPES: MessageType[] = [
   MessageType.CALL,
 ];
 const LIST_DEFAULT_LIMIT = 30;
+const AROUND_HALF_WINDOW = 30;
 
 type MessageWithRelations = {
   id: string;
@@ -126,27 +129,128 @@ export class MessagesService {
 
     const hasMore = messages.length > take;
     const page = messages.slice(0, take);
+    const items = await this.toViewsWithReactions(page);
+    return { items, nextCursor: hasMore ? page[page.length - 1].id : null };
+  }
 
+  /** Cửa sổ tin quanh 1 tin (mới nhất trước). Thời gian không phụ thuộc khoảng cách tới tin đó. */
+  async aroundMessage(membership: ConversationMembership, messageId: string) {
+    const visible = {
+      conversationId: membership.conversationId,
+      deletions: { none: { userId: membership.userId } },
+    };
+    const target = await this.prisma.message.findFirst({
+      where: { ...visible, id: messageId },
+      include: messageInclude,
+    });
+    if (!target) throw new NotFoundException('Không tìm thấy tin nhắn');
+
+    const half = AROUND_HALF_WINDOW;
+    const olderThan = {
+      OR: [
+        { createdAt: { lt: target.createdAt } },
+        { createdAt: target.createdAt, id: { lt: target.id } },
+      ],
+    };
+    const newerThan = {
+      OR: [
+        { createdAt: { gt: target.createdAt } },
+        { createdAt: target.createdAt, id: { gt: target.id } },
+      ],
+    };
+    const [older, newer] = await Promise.all([
+      this.prisma.message.findMany({
+        where: { ...visible, ...olderThan },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        take: half + 1,
+        include: messageInclude,
+      }),
+      this.prisma.message.findMany({
+        where: { ...visible, ...newerThan },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        take: half + 1,
+        include: messageInclude,
+      }),
+    ]);
+
+    const hasOlder = older.length > half;
+    const hasNewer = newer.length > half;
+    const olderPage = older.slice(0, half);
+    const newerPage = newer.slice(0, half).reverse();
+    const window = [...newerPage, target, ...olderPage];
+    const items = await this.toViewsWithReactions(window);
+    return {
+      items,
+      nextCursor: hasOlder ? olderPage[olderPage.length - 1].id : null,
+      hasNewer,
+    };
+  }
+
+  private async toViewsWithReactions(page: MessageWithRelations[]) {
     const reactions = page.length
       ? await this.prisma.messageReaction.findMany({
           where: { messageId: { in: page.map((m) => m.id) } },
           select: { messageId: true, userId: true, reactionType: true },
         })
       : [];
-    const reactionsByMessage = new Map<
-      string,
-      { userId: string; reactionType: string }[]
-    >();
+    const reactionsByMessage = new Map<string, { userId: string; reactionType: string }[]>();
     for (const r of reactions) {
       const arr = reactionsByMessage.get(r.messageId) ?? [];
       arr.push({ userId: r.userId, reactionType: r.reactionType });
       reactionsByMessage.set(r.messageId, arr);
     }
+    return page.map((m) => this.toMessageView(m, reactionsByMessage.get(m.id) ?? []));
+  }
 
-    const items = page.map((m) =>
-      this.toMessageView(m, reactionsByMessage.get(m.id) ?? []),
-    );
-    return { items, nextCursor: hasMore ? page[page.length - 1].id : null };
+  async searchMessages(membership: ConversationMembership, dto: SearchMessagesDto) {
+    const take = dto.limit ?? LIST_DEFAULT_LIMIT;
+    const messages = await this.prisma.message.findMany({
+      where: {
+        conversationId: membership.conversationId,
+        type: MessageType.TEXT,
+        isRecalled: false,
+        content: { contains: dto.q },
+        deletions: { none: { userId: membership.userId } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: take + 1,
+      ...(dto.cursor ? { cursor: { id: dto.cursor }, skip: 1 } : {}),
+      select: {
+        id: true,
+        content: true,
+        createdAt: true,
+        sender: { select: publicUserSelect },
+      },
+    });
+    const hasMore = messages.length > take;
+    const page = messages.slice(0, take);
+    return {
+      items: page,
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    };
+  }
+
+  async listMediaMessages(membership: ConversationMembership, dto: ListMediaDto) {
+    const take = dto.limit ?? LIST_DEFAULT_LIMIT;
+    const types = dto.kind === 'MEDIA' ? [MessageType.IMAGE, MessageType.VIDEO] : [MessageType.FILE];
+    const messages = await this.prisma.message.findMany({
+      where: {
+        conversationId: membership.conversationId,
+        type: { in: types },
+        isRecalled: false,
+        deletions: { none: { userId: membership.userId } },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      take: take + 1,
+      ...(dto.cursor ? { cursor: { id: dto.cursor }, skip: 1 } : {}),
+      include: messageInclude,
+    });
+    const hasMore = messages.length > take;
+    const page = messages.slice(0, take);
+    return {
+      items: page.map((m) => this.toMessageView(m)),
+      nextCursor: hasMore ? page[page.length - 1].id : null,
+    };
   }
 
   async sendMessage(membership: ConversationMembership, dto: SendMessageDto) {
