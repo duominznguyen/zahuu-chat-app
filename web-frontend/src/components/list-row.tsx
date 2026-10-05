@@ -7,12 +7,23 @@ interface ListRowProps {
   trailing?: ReactNode;
   onClick?: () => void;
   active?: boolean;
+  // Đậm hơn mức mặc định — dùng cho conversation chưa đọc, phân biệt rõ hơn
+  // "font-medium" tiêu chuẩn của title/subtitle.
+  emphasized?: boolean;
 }
 
 // Dùng div thay vì button cho cả hàng — trailing thường chứa nút/menu riêng
 // (vd "..."), lồng button trong button là HTML không hợp lệ. stopPropagation
 // trên trailing để bấm nút đó không kích hoạt luôn onClick của cả hàng.
-export function ListRow({ leading, title, subtitle, trailing, onClick, active }: ListRowProps) {
+export function ListRow({
+  leading,
+  title,
+  subtitle,
+  trailing,
+  onClick,
+  active,
+  emphasized,
+}: ListRowProps) {
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (onClick && (e.key === "Enter" || e.key === " ")) {
       e.preventDefault();
@@ -38,8 +49,16 @@ export function ListRow({ leading, title, subtitle, trailing, onClick, active }:
     >
       {leading}
       <div className="min-w-0 flex-1">
-        <p className="truncate text-sm font-medium text-foreground">{title}</p>
-        {subtitle && <p className="truncate text-sm text-muted-foreground">{subtitle}</p>}
+        <p className={`truncate text-sm text-foreground ${emphasized ? "font-semibold" : "font-medium"}`}>
+          {title}
+        </p>
+        {subtitle && (
+          <p
+            className={`truncate text-sm ${emphasized ? "font-medium text-foreground" : "text-muted-foreground"}`}
+          >
+            {subtitle}
+          </p>
+        )}
       </div>
       {trailing && (
         <div onClick={(e) => e.stopPropagation()} className="flex shrink-0 items-center gap-2">

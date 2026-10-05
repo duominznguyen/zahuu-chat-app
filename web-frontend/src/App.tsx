@@ -13,7 +13,7 @@ import { queryClient } from "@/lib/query-client";
 import { SocketProvider } from "@/providers/socket-provider";
 import { useAuthStore } from "@/store/auth-store";
 import ChatEmpty from "@/pages/chat-empty";
-import ConversationPlaceholder from "@/pages/conversation-placeholder";
+import Conversation from "@/pages/conversation";
 import ForgotPassword from "@/pages/forgot-password";
 import FriendProfile from "@/pages/friend-profile";
 import FriendsEmpty from "@/pages/friends-empty";
@@ -117,7 +117,7 @@ function AppRoutes() {
           }
         >
           <Route path="/chat" element={<ChatEmpty />} />
-          <Route path="/chat/:conversationId" element={<ConversationPlaceholder />} />
+          <Route path="/chat/:conversationId" element={<Conversation />} />
           <Route path="/friends" element={<FriendsEmpty />} />
           <Route path="/friends/:userId" element={<FriendProfile />} />
         </Route>
