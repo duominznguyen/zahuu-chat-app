@@ -32,6 +32,29 @@ const publicUserSelect = {
   avatarUrl: true,
 } as const;
 
+const systemMessageSelect = {
+  id: true,
+  conversationId: true,
+  type: true,
+  content: true,
+  createdAt: true,
+  sender: { select: publicUserSelect },
+} as const;
+
+type SystemMessageContent = {
+  event: string;
+  actorId: string;
+  targetId?: string;
+  // Snapshot displayName của target NGAY LÚC tạo tin — target có thể không
+  // còn là thành viên khi tin được đọc lại sau này (member_removed/
+  // member_left luôn rơi vào đúng tình huống này), lúc đó không còn cách nào
+  // tra ngược lại tên qua `members` nữa nên phải lưu sẵn, không dựa hoàn
+  // toàn vào lookup runtime (xem translateSystemMessage/system-message.ts).
+  targetName?: string;
+  newName?: string;
+  nickname?: string;
+};
+
 const LIST_DEFAULT_LIMIT = 30;
 
 @Injectable()
@@ -67,6 +90,7 @@ export class ConversationsService {
             content: true,
             isRecalled: true,
             senderId: true,
+            sender: { select: { displayName: true } },
           },
         },
       },
@@ -283,9 +307,35 @@ export class ConversationsService {
       );
     }
 
-    await this.prisma.conversation.update({
-      where: { id: membership.conversationId },
-      data: { name: dto.name, avatarUrl: dto.avatarUrl },
+    const systemMessages = await this.prisma.$transaction(async (tx) => {
+      await tx.conversation.update({
+        where: { id: membership.conversationId },
+        data: { name: dto.name, avatarUrl: dto.avatarUrl },
+      });
+      const messages: Awaited<ReturnType<typeof this.createSystemMessage>>[] =
+        [];
+      if (dto.name !== undefined) {
+        messages.push(
+          await this.createSystemMessage(
+            tx,
+            membership.conversationId,
+            membership.userId,
+            'name_changed',
+            { newName: dto.name },
+          ),
+        );
+      }
+      if (dto.avatarUrl !== undefined) {
+        messages.push(
+          await this.createSystemMessage(
+            tx,
+            membership.conversationId,
+            membership.userId,
+            'avatar_changed',
+          ),
+        );
+      }
+      return messages;
     });
     this.events.emit('group.updated', {
       conversationId: membership.conversationId,
@@ -294,6 +344,7 @@ export class ConversationsService {
         ...(dto.avatarUrl !== undefined && { avatarUrl: dto.avatarUrl }),
       },
     });
+    for (const m of systemMessages) this.emitSystemMessage(m);
     return this.getConversationDetail(
       membership.conversationId,
       membership.userId,
@@ -311,14 +362,23 @@ export class ConversationsService {
         dto.url,
       );
     }
-    await this.prisma.conversation.update({
-      where: { id: membership.conversationId },
-      data: { backgroundUrl: dto.url },
+    const systemMessage = await this.prisma.$transaction(async (tx) => {
+      await tx.conversation.update({
+        where: { id: membership.conversationId },
+        data: { backgroundUrl: dto.url },
+      });
+      return this.createSystemMessage(
+        tx,
+        membership.conversationId,
+        membership.userId,
+        'background_changed',
+      );
     });
     this.events.emit('group.updated', {
       conversationId: membership.conversationId,
       changedFields: { backgroundUrl: dto.url },
     });
+    this.emitSystemMessage(systemMessage);
     return this.getConversationDetail(
       membership.conversationId,
       membership.userId,
@@ -328,20 +388,24 @@ export class ConversationsService {
   async leaveConversation(membership: ConversationMembership) {
     await this.assertGroup(membership.conversationId);
 
-    const groupDeleted = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
+      let promotedUserId: string | null = null;
+      let promotedDisplayName: string | null = null;
       if (membership.role === MemberRole.ADMIN) {
-        const canContinue = await this.promoteNextAdminIfNeeded(
+        const promotion = await this.promoteNextAdminIfNeeded(
           tx,
           membership.conversationId,
           membership.userId,
         );
-        if (!canContinue) {
+        if (!promotion.canContinue) {
           // Không còn ai khác -> xóa hẳn nhóm (cascade xóa luôn membership này)
           await tx.conversation.delete({
             where: { id: membership.conversationId },
           });
-          return true;
+          return { groupDeleted: true as const };
         }
+        promotedUserId = promotion.promotedUserId;
+        promotedDisplayName = promotion.promotedDisplayName;
       }
       await tx.conversationMember.delete({
         where: {
@@ -351,15 +415,32 @@ export class ConversationsService {
           },
         },
       });
-      return false;
+      const leftMessage = await this.createSystemMessage(
+        tx,
+        membership.conversationId,
+        membership.userId,
+        'member_left',
+      );
+      const promotedMessage = promotedUserId
+        ? await this.createSystemMessage(
+            tx,
+            membership.conversationId,
+            promotedUserId,
+            'role_promoted',
+            { targetId: promotedUserId, targetName: promotedDisplayName },
+          )
+        : null;
+      return { groupDeleted: false as const, leftMessage, promotedMessage };
     });
 
     // Nhóm đã bị xóa hẳn thì không còn room nào để báo
-    if (!groupDeleted) {
+    if (!result.groupDeleted) {
       this.events.emit('group.member.removed', {
         conversationId: membership.conversationId,
         userId: membership.userId,
       });
+      this.emitSystemMessage(result.leftMessage);
+      if (result.promotedMessage) this.emitSystemMessage(result.promotedMessage);
     }
   }
 
@@ -380,19 +461,32 @@ export class ConversationsService {
     await this.assertFriends(membership.userId, targetUserId);
 
     let member;
+    let systemMessage;
     try {
-      member = await this.prisma.conversationMember.create({
-        data: {
-          conversationId: membership.conversationId,
-          userId: targetUserId,
-          role: MemberRole.MEMBER,
+      ({ member, systemMessage } = await this.prisma.$transaction(
+        async (tx) => {
+          const created = await tx.conversationMember.create({
+            data: {
+              conversationId: membership.conversationId,
+              userId: targetUserId,
+              role: MemberRole.MEMBER,
+            },
+            select: {
+              role: true,
+              joinedAt: true,
+              user: { select: publicUserSelect },
+            },
+          });
+          const systemMessage = await this.createSystemMessage(
+            tx,
+            membership.conversationId,
+            membership.userId,
+            'member_added',
+            { targetId: targetUserId, targetName: created.user.displayName },
+          );
+          return { member: created, systemMessage };
         },
-        select: {
-          role: true,
-          joinedAt: true,
-          user: { select: publicUserSelect },
-        },
-      });
+      ));
     } catch (e) {
       if (isUniqueViolation(e)) {
         throw new ConflictException({
@@ -409,6 +503,7 @@ export class ConversationsService {
       addedById: membership.userId,
       notify: true,
     });
+    this.emitSystemMessage(systemMessage);
     return this.getConversationDetail(
       membership.conversationId,
       membership.userId,
@@ -424,19 +519,40 @@ export class ConversationsService {
       );
     }
 
-    const { count } = await this.prisma.conversationMember.deleteMany({
-      where: {
-        conversationId: membership.conversationId,
-        userId: targetUserId,
-      },
+    const systemMessage = await this.prisma.$transaction(async (tx) => {
+      const target = await tx.conversationMember.findUnique({
+        where: {
+          conversationId_userId: {
+            conversationId: membership.conversationId,
+            userId: targetUserId,
+          },
+        },
+        select: { user: { select: { displayName: true } } },
+      });
+      if (!target) {
+        throw new NotFoundException('Người này không phải thành viên');
+      }
+      await tx.conversationMember.delete({
+        where: {
+          conversationId_userId: {
+            conversationId: membership.conversationId,
+            userId: targetUserId,
+          },
+        },
+      });
+      return this.createSystemMessage(
+        tx,
+        membership.conversationId,
+        membership.userId,
+        'member_removed',
+        { targetId: targetUserId, targetName: target.user.displayName },
+      );
     });
-    if (count === 0) {
-      throw new NotFoundException('Người này không phải thành viên');
-    }
     this.events.emit('group.member.removed', {
       conversationId: membership.conversationId,
       userId: targetUserId,
     });
+    this.emitSystemMessage(systemMessage);
   }
 
   async updateMemberRole(
@@ -454,28 +570,58 @@ export class ConversationsService {
           userId: targetUserId,
         },
       },
+      include: { user: { select: { displayName: true } } },
     });
     if (!target) throw new NotFoundException('Người này không phải thành viên');
     if (target.role === role) return;
 
-    await this.prisma.$transaction(async (tx) => {
-      if (target.role === MemberRole.ADMIN && role === MemberRole.MEMBER) {
-        const promoted = await this.promoteNextAdminIfNeeded(
+    const { mainMessage, promotedMessage } = await this.prisma.$transaction(
+      async (tx) => {
+        let promotedUserId: string | null = null;
+        let promotedDisplayName: string | null = null;
+        if (target.role === MemberRole.ADMIN && role === MemberRole.MEMBER) {
+          const result = await this.promoteNextAdminIfNeeded(
+            tx,
+            membership.conversationId,
+            targetUserId,
+          );
+          if (!result.canContinue) {
+            throw new ConflictException(
+              'Không thể giáng chức admin duy nhất khi nhóm không còn thành viên nào khác',
+            );
+          }
+          promotedUserId = result.promotedUserId;
+          promotedDisplayName = result.promotedDisplayName;
+        }
+        await tx.conversationMember.update({
+          where: { id: target.id },
+          data: { role },
+        });
+
+        const mainMessage = await this.createSystemMessage(
           tx,
           membership.conversationId,
-          targetUserId,
+          membership.userId,
+          role === MemberRole.ADMIN ? 'role_promoted' : 'role_demoted',
+          { targetId: targetUserId, targetName: target.user.displayName },
         );
-        if (!promoted) {
-          throw new ConflictException(
-            'Không thể giáng chức admin duy nhất khi nhóm không còn thành viên nào khác',
-          );
-        }
-      }
-      await tx.conversationMember.update({
-        where: { id: target.id },
-        data: { role },
-      });
-    });
+        // Chính sách "admin cuối cùng" tự thăng 1 người khác khi giáng chức
+        // chính admin cuối — phải báo riêng, không thì người xem chat chỉ
+        // thấy "giáng chức X" mà không biết ai vừa thành admin mới.
+        const promotedMessage = promotedUserId
+          ? await this.createSystemMessage(
+              tx,
+              membership.conversationId,
+              promotedUserId,
+              'role_promoted',
+              { targetId: promotedUserId, targetName: promotedDisplayName },
+            )
+          : null;
+        return { mainMessage, promotedMessage };
+      },
+    );
+    this.emitSystemMessage(mainMessage);
+    if (promotedMessage) this.emitSystemMessage(promotedMessage);
   }
 
   async setNickname(
@@ -490,28 +636,39 @@ export class ConversationsService {
           userId: targetUserId,
         },
       },
+      include: { user: { select: { displayName: true } } },
     });
     if (!target) throw new NotFoundException('Người này không phải thành viên');
 
-    await this.prisma.conversationNickname.upsert({
-      where: {
-        conversationId_targetUserId: {
+    const systemMessage = await this.prisma.$transaction(async (tx) => {
+      await tx.conversationNickname.upsert({
+        where: {
+          conversationId_targetUserId: {
+            conversationId: membership.conversationId,
+            targetUserId,
+          },
+        },
+        create: {
           conversationId: membership.conversationId,
           targetUserId,
+          nickname,
+          setById: membership.userId,
         },
-      },
-      create: {
-        conversationId: membership.conversationId,
-        targetUserId,
-        nickname,
-        setById: membership.userId,
-      },
-      update: { nickname, setById: membership.userId },
+        update: { nickname, setById: membership.userId },
+      });
+      return this.createSystemMessage(
+        tx,
+        membership.conversationId,
+        membership.userId,
+        'nickname_set',
+        { targetId: targetUserId, targetName: target.user.displayName, nickname },
+      );
     });
     this.events.emit('group.updated', {
       conversationId: membership.conversationId,
       changedFields: { nickname: { targetUserId, nickname } },
     });
+    this.emitSystemMessage(systemMessage);
     return { targetUserId, nickname };
   }
 
@@ -600,18 +757,29 @@ export class ConversationsService {
     }
 
     try {
-      const member = await this.prisma.conversationMember.create({
-        data: {
-          conversationId: link.conversationId,
-          userId,
-          role: MemberRole.MEMBER,
+      const { member, systemMessage } = await this.prisma.$transaction(
+        async (tx) => {
+          const created = await tx.conversationMember.create({
+            data: {
+              conversationId: link.conversationId,
+              userId,
+              role: MemberRole.MEMBER,
+            },
+            select: {
+              role: true,
+              joinedAt: true,
+              user: { select: publicUserSelect },
+            },
+          });
+          const systemMessage = await this.createSystemMessage(
+            tx,
+            link.conversationId,
+            userId,
+            'member_joined_via_link',
+          );
+          return { member: created, systemMessage };
         },
-        select: {
-          role: true,
-          joinedAt: true,
-          user: { select: publicUserSelect },
-        },
-      });
+      );
       this.events.emit('group.member.added', {
         conversationId: link.conversationId,
         member: {
@@ -623,6 +791,7 @@ export class ConversationsService {
         // Tự join bằng link là hành động của chính mình -> không cần tự thông báo cho mình
         notify: false,
       });
+      this.emitSystemMessage(systemMessage);
     } catch (e) {
       // Đã là thành viên rồi -> coi như thành công, không báo lỗi, không emit lại
       if (!isUniqueViolation(e)) throw e;
@@ -687,12 +856,19 @@ export class ConversationsService {
   }
 
   /** Nếu excludeUserId là admin duy nhất, tự thăng thành viên vào sớm nhất lên ADMIN.
-   *  Trả về false nếu không còn ai khác để thăng. */
+   *  `canContinue: false` nghĩa là không còn ai khác trong nhóm để thăng (gọi nơi
+   *  dùng phải tự xử lý — vd xóa hẳn nhóm). `promotedUserId` khác null khi có
+   *  người vừa được thăng, để nơi gọi tự phát tin hệ thống `role_promoted` cho
+   *  đúng người đó (phân biệt với trường hợp đã sẵn có admin khác, không cần thăng ai). */
   private async promoteNextAdminIfNeeded(
     tx: Prisma.TransactionClient,
     conversationId: string,
     excludeUserId: string,
-  ) {
+  ): Promise<{
+    canContinue: boolean;
+    promotedUserId: string | null;
+    promotedDisplayName: string | null;
+  }> {
     const remainingAdmins = await tx.conversationMember.count({
       where: {
         conversationId,
@@ -700,22 +876,122 @@ export class ConversationsService {
         userId: { not: excludeUserId },
       },
     });
-    if (remainingAdmins > 0) return true;
+    if (remainingAdmins > 0) {
+      return { canContinue: true, promotedUserId: null, promotedDisplayName: null };
+    }
 
     // id phụ làm tiebreaker để kết quả ổn định khi joinedAt trùng (vd: tạo group,
     // nhiều thành viên join cùng lúc trong 1 lệnh)
     const next = await tx.conversationMember.findFirst({
       where: { conversationId, userId: { not: excludeUserId } },
       orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
-      select: { id: true },
+      select: { userId: true, user: { select: { displayName: true } } },
     });
-    if (!next) return false;
+    if (!next) {
+      return { canContinue: false, promotedUserId: null, promotedDisplayName: null };
+    }
 
     await tx.conversationMember.update({
-      where: { id: next.id },
+      where: { conversationId_userId: { conversationId, userId: next.userId } },
       data: { role: MemberRole.ADMIN },
     });
-    return true;
+    return {
+      canContinue: true,
+      promotedUserId: next.userId,
+      promotedDisplayName: next.user.displayName,
+    };
+  }
+
+  /** Tạo 1 tin SYSTEM trong CÙNG transaction của hành động gốc + cập nhật
+   *  Conversation.lastMessageAt/lastMessageId giống tin nhắn thường (để nổi
+   *  lên đầu danh sách conversation). `senderId` = actor (người thực hiện
+   *  hành động) — tái dùng quan hệ `sender` có sẵn, không thêm cột riêng. */
+  private async createSystemMessage(
+    tx: Prisma.TransactionClient,
+    conversationId: string,
+    actorId: string,
+    event: string,
+    payload: Record<string, unknown> = {},
+  ) {
+    const content: SystemMessageContent = { event, actorId, ...payload };
+    const created = await tx.message.create({
+      data: {
+        conversationId,
+        senderId: actorId,
+        type: MessageType.SYSTEM,
+        content: JSON.stringify(content),
+      },
+      select: systemMessageSelect,
+    });
+    await tx.conversation.update({
+      where: { id: conversationId },
+      data: { lastMessageAt: created.createdAt, lastMessageId: created.id },
+    });
+    return created;
+  }
+
+  /** Broadcast tin SYSTEM vừa tạo giống hệt tin nhắn thường qua `message.created`
+   *  — ChatGateway không cần biết gì khác, `message:new` đã broadcast đúng cơ chế.
+   *  Gọi SAU KHI transaction tạo tin đã commit (không emit trong lúc còn transaction). */
+  private emitSystemMessage(
+    created: Awaited<ReturnType<typeof this.createSystemMessage>>,
+  ) {
+    this.events.emit('message.created', {
+      conversationId: created.conversationId,
+      message: {
+        id: created.id,
+        conversationId: created.conversationId,
+        sender: created.sender,
+        type: created.type,
+        content: created.content,
+        mediaUrl: null,
+        mediaPublicId: null,
+        mediaName: null,
+        mediaSize: null,
+        replyTo: null,
+        isRecalled: false,
+        recalledAt: null,
+        createdAt: created.createdAt,
+        reactions: [],
+      },
+    });
+  }
+
+  private parseSystemContent(content: string): SystemMessageContent {
+    return JSON.parse(content) as SystemMessageContent;
+  }
+
+  /** Dịch tin SYSTEM sang tiếng Việt cho preview trên conversation list — CHỈ
+   *  dùng `displayName` thuần (không tra nickname) vì list không có context
+   *  đầy đủ như trong chat; `MessageBubble` phía client tự dịch lại bằng
+   *  nickname thật khi hiện trong đúng đoạn chat. */
+  private translateSystemMessage(content: string, actorName: string): string {
+    const data = this.parseSystemContent(content);
+    const targetName = data.targetName;
+    switch (data.event) {
+      case 'member_added':
+        return `${actorName} đã thêm ${targetName} vào nhóm`;
+      case 'member_joined_via_link':
+        return `${actorName} đã tham gia nhóm qua link mời`;
+      case 'member_left':
+        return `${actorName} đã rời nhóm`;
+      case 'member_removed':
+        return `${actorName} đã xoá ${targetName} khỏi nhóm`;
+      case 'role_promoted':
+        return `${actorName} đã bổ nhiệm ${targetName} làm quản trị viên`;
+      case 'role_demoted':
+        return `${actorName} đã gỡ quyền quản trị viên của ${targetName}`;
+      case 'name_changed':
+        return `${actorName} đã đổi tên nhóm thành "${data.newName}"`;
+      case 'avatar_changed':
+        return `${actorName} đã đổi ảnh đại diện nhóm`;
+      case 'background_changed':
+        return `${actorName} đã đổi hình nền đoạn chat`;
+      case 'nickname_set':
+        return `${actorName} đã đặt biệt danh cho ${targetName} là "${data.nickname}"`;
+      default:
+        return '';
+    }
   }
 
   private toSummary(
@@ -732,6 +1008,7 @@ export class ConversationsService {
         content: string | null;
         isRecalled: boolean;
         senderId: string;
+        sender: { displayName: string };
       } | null;
       members: Array<{
         userId: string;
@@ -761,6 +1038,13 @@ export class ConversationsService {
       content: conv.lastMessage.isRecalled ? null : conv.lastMessage.content,
       isRecalled: conv.lastMessage.isRecalled,
       senderId: conv.lastMessage.senderId,
+      previewText:
+        conv.lastMessage.type === MessageType.SYSTEM
+          ? this.translateSystemMessage(
+              conv.lastMessage.content!,
+              conv.lastMessage.sender.displayName,
+            )
+          : null,
     };
 
     if (conv.type === ConversationType.GROUP) {

@@ -387,9 +387,14 @@ export default function Conversation() {
               // người gửi (chỉ GROUP) hiện ở tin ĐẦU chuỗi (trên cùng).
               const nextMessage = messages[index - 1];
               const prevMessage = messages[index + 1];
-              const showAvatar = !nextMessage || nextMessage.sender.id !== item.sender.id;
+              // Tin SYSTEM không thuộc chuỗi tin nhắn của ai — luôn coi là
+              // "ngắt cụm" để không làm sai lệch avatar/tên của tin THẬT nằm
+              // cạnh nó (vd trùng senderId với actor của chính tin SYSTEM đó).
+              const showAvatar =
+                !nextMessage || nextMessage.type === "SYSTEM" || nextMessage.sender.id !== item.sender.id;
               const showSenderName =
-                !isDirect && (!prevMessage || prevMessage.sender.id !== item.sender.id);
+                !isDirect &&
+                (!prevMessage || prevMessage.type === "SYSTEM" || prevMessage.sender.id !== item.sender.id);
               const myReaction = item.reactions.find((r) => r.userId === myId)?.reactionType;
 
               return (
@@ -401,6 +406,7 @@ export default function Conversation() {
                   showSenderName={showSenderName}
                   seen={!!seen}
                   isHighlighted={highlightedId === item.id}
+                  members={detailQuery.data?.members ?? []}
                   myReaction={myReaction}
                   onReply={() => setReplyTarget(item)}
                   onReact={(type) => reactMutation.mutate({ messageId: item.id, reactionType: type })}

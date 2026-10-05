@@ -23,6 +23,9 @@ const MEDIA_LABEL: Record<string, string> = {
 function previewText(c: ConversationSummary, myId: string | undefined) {
   if (!c.lastMessage) return "Hãy bắt đầu trò chuyện";
   if (c.lastMessage.isRecalled) return "Tin nhắn đã thu hồi";
+  // Tin SYSTEM đã là 1 câu hoàn chỉnh dịch sẵn từ BE (vd "A đã thêm B vào
+  // nhóm") — không thêm tiền tố "Bạn: " như tin nhắn thường.
+  if (c.lastMessage.type === "SYSTEM") return c.lastMessage.previewText ?? "";
   const prefix = c.lastMessage.senderId === myId ? "Bạn: " : "";
   if (c.lastMessage.type !== "TEXT") {
     return `${prefix}Đã gửi 1 ${MEDIA_LABEL[c.lastMessage.type]}`;

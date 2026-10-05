@@ -11,9 +11,11 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
+import type { ConversationMember } from "@/lib/conversations";
 import { formatBytes } from "@/lib/media";
 import type { Message, ReactionType } from "@/lib/messages";
 import { replyPreviewLabel } from "@/lib/reply-preview";
+import { systemMessageText } from "@/lib/system-message";
 
 const REACTIONS: ReactionType[] = ["like", "love", "haha", "wow", "sad", "angry"];
 const REACTION_EMOJI: Record<ReactionType, string> = {
@@ -96,6 +98,7 @@ interface MessageBubbleProps {
   showSenderName: boolean;
   seen: boolean;
   isHighlighted: boolean;
+  members: ConversationMember[];
   myReaction?: ReactionType;
   onReply: () => void;
   onReact: (type: ReactionType) => void;
@@ -114,6 +117,7 @@ export function MessageBubble({
   showSenderName,
   seen,
   isHighlighted,
+  members,
   myReaction,
   onReply,
   onReact,
@@ -125,6 +129,20 @@ export function MessageBubble({
   onJumpToMessage,
 }: MessageBubbleProps) {
   const [menuOpen, setMenuOpen] = useState(false);
+
+  // Tin SYSTEM (sự kiện nhóm) không phải tin nhắn thật — không avatar/bong
+  // bóng màu/menu "...", chỉ 1 dòng text nhỏ căn giữa. Chặn hẳn từ phía
+  // client (không chỉ dựa vào backend trả 400 cho recall/reaction/reply).
+  if (message.type === "SYSTEM") {
+    return (
+      <div id={`message-${message.id}`} className="my-2 flex justify-center px-8">
+        <p className="text-center text-xs text-muted-foreground">
+          {message.content ? systemMessageText(message.content, message.sender, members) : ""}
+        </p>
+      </div>
+    );
+  }
+
   const isRecalled = message.isRecalled;
   const reactionEmojis = isRecalled ? [] : [...new Set(message.reactions.map((r) => r.reactionType))];
   const bubbleColor = isOwn ? "bg-primary text-primary-foreground" : "bg-secondary text-foreground";

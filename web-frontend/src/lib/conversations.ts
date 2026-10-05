@@ -6,10 +6,14 @@ export type MemberRole = "ADMIN" | "MEMBER";
 
 export interface MessagePreview {
   id: string;
-  type: "TEXT" | "IMAGE" | "VIDEO" | "FILE" | "STICKER";
+  type: "TEXT" | "IMAGE" | "VIDEO" | "FILE" | "STICKER" | "SYSTEM";
   content: string | null;
   isRecalled: boolean;
   senderId: string;
+  // Chỉ có giá trị khi type === "SYSTEM" — BE tự dịch sẵn sang tiếng Việt
+  // (vd "A đã thêm B vào nhóm") vì list không có đủ context member/nickname
+  // để tự dịch như trong chat (xem MessageBubble + system-message.ts).
+  previewText: string | null;
 }
 
 export interface ConversationSummary {

@@ -1,7 +1,13 @@
 import { apiClient } from "./api-client";
 import type { PublicUser } from "./friends";
 
-export type MessageType = "TEXT" | "IMAGE" | "VIDEO" | "FILE" | "STICKER";
+export type MessageType =
+  | "TEXT"
+  | "IMAGE"
+  | "VIDEO"
+  | "FILE"
+  | "STICKER"
+  | "SYSTEM";
 export type ReactionType = "like" | "love" | "haha" | "wow" | "sad" | "angry";
 
 export interface ReplyToPreview {

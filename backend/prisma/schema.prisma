@@ -328,6 +328,7 @@ enum MessageType {
   VIDEO
   FILE
   STICKER
+  SYSTEM // sự kiện nhóm (thêm/xoá thành viên, đổi tên...), không phải tin nhắn thật
 }
 
 model MessageReaction {

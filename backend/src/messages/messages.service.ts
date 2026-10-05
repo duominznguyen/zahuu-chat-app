@@ -128,10 +128,13 @@ export class MessagesService {
     if (dto.replyToId) {
       const replyTo = await this.prisma.message.findUnique({
         where: { id: dto.replyToId },
-        select: { conversationId: true },
+        select: { conversationId: true, type: true },
       });
       if (!replyTo || replyTo.conversationId !== membership.conversationId) {
         throw new BadRequestException('replyToId không hợp lệ');
+      }
+      if (replyTo.type === MessageType.SYSTEM) {
+        throw new BadRequestException('Không thể trả lời tin nhắn hệ thống');
       }
     }
 
@@ -178,6 +181,9 @@ export class MessagesService {
 
   async recallMessage(userId: string, messageId: string) {
     const message = await this.loadOwnScope(userId, messageId);
+    if (message.type === MessageType.SYSTEM) {
+      throw new BadRequestException('Không thể thu hồi tin nhắn hệ thống');
+    }
     if (message.senderId !== userId) {
       throw new ForbiddenException(
         'Chỉ người gửi mới được thu hồi tin nhắn này',
@@ -217,6 +223,11 @@ export class MessagesService {
 
   async setReaction(userId: string, messageId: string, reactionType: string) {
     const message = await this.loadOwnScope(userId, messageId);
+    if (message.type === MessageType.SYSTEM) {
+      throw new BadRequestException(
+        'Không thể thả cảm xúc cho tin nhắn hệ thống',
+      );
+    }
     if (message.isRecalled) {
       throw new BadRequestException(
         'Không thể thả cảm xúc cho tin nhắn đã thu hồi',
