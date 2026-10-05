@@ -31,8 +31,14 @@ export class JwtAuthGuard implements CanActivate {
     const request = context
       .switchToHttp()
       .getRequest<Request & { user?: AuthUser }>();
-    const [type, token] = request.headers.authorization?.split(' ') ?? [];
-    if (type !== 'Bearer' || !token) {
+    // Mobile luôn gửi header nên hành vi không đổi — cookie chỉ là fallback cho web.
+    const [type, headerToken] =
+      request.headers.authorization?.split(' ') ?? [];
+    const token =
+      type === 'Bearer'
+        ? headerToken
+        : (request.cookies?.accessToken as string | undefined);
+    if (!token) {
       throw new UnauthorizedException('Thiếu access token');
     }
 

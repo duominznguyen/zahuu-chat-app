@@ -19,8 +19,6 @@ import { OtpService } from './otp.service.js';
 import { generateUniqueUsername } from './utils/username.util.js';
 import { ForgotPasswordDto } from './dto/forgot-password.dto.js';
 import { ResetPasswordDto } from './dto/reset-password.dto.js';
-import { RefreshTokenDto } from './dto/refresh-token.dto.js';
-import { LogoutDto } from './dto/logout.dto.js';
 import { GoogleAuthDto } from './dto/google-auth.dto.js';
 import { GoogleTokenVerifier } from './google-token.verifier.js';
 import { isUniqueViolation } from '../common/prisma-errors.js';
@@ -309,7 +307,10 @@ export class AuthService {
     return this.issueTokens(userId);
   }
 
-  async refresh(dto: RefreshTokenDto) {
+  // refreshToken bắt buộc (khác RefreshTokenDto ở tầng controller, nơi field
+  // này optional để hỗ trợ web gửi qua cookie) — controller đã tự resolve
+  // cookie-hoặc-body thành 1 giá trị chắc chắn trước khi gọi xuống đây.
+  async refresh(dto: { refreshToken: string }) {
     const invalid = () =>
       new UnauthorizedException('Refresh token không hợp lệ hoặc đã hết hạn');
 
@@ -358,7 +359,8 @@ export class AuthService {
     return { accessToken, refreshToken: next.token };
   }
 
-  async logout(dto: LogoutDto) {
+  // Cùng lý do với refresh() ở trên — refreshToken bắt buộc ở tầng service.
+  async logout(dto: { refreshToken: string; fcmToken?: string }) {
     await this.prisma.refreshToken.updateMany({
       where: { tokenHash: this.hashToken(dto.refreshToken), revokedAt: null },
       data: { revokedAt: new Date() },

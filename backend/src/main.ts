@@ -1,5 +1,6 @@
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
+import cookieParser from 'cookie-parser';
 import { AppModule } from './app.module.js';
 import { RedisIoAdapter } from './redis/redis-io.adapter.js';
 
@@ -15,6 +16,15 @@ async function bootstrap() {
     }),
   );
   const config = app.get(ConfigService);
+
+  app.use(cookieParser());
+  app.enableCors({
+    origin: config
+      .getOrThrow<string>('CORS_ORIGINS')
+      .split(',')
+      .map((s) => s.trim()),
+    credentials: true, // bắt buộc để browser gửi/nhận cookie cross-origin
+  });
 
   const redisIoAdapter = new RedisIoAdapter(app);
   await redisIoAdapter.connectToRedis(
