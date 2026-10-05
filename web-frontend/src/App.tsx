@@ -34,6 +34,13 @@ import UserProfileModal from "@/pages/user-profile-modal";
 import UserProfileStandalone from "@/pages/user-profile-standalone";
 import VerifyOtp from "@/pages/verify-otp";
 import Welcome from "@/pages/welcome";
+import SettingsAppearance from "@/pages/settings-appearance";
+import SettingsBlocked from "@/pages/settings-blocked";
+import SettingsDeactivate from "@/pages/settings-deactivate";
+import SettingsLayout from "@/pages/settings-layout";
+import SettingsPassword from "@/pages/settings-password";
+import SettingsProfile from "@/pages/settings-profile";
+import SettingsUsername from "@/pages/settings-username";
 
 // Danh sách path dùng kỹ thuật "background location" (modal đè lên route nền
 // thay vì thay thế hẳn) — xem mục "Modal route" web-frontend-plan.md.
@@ -184,6 +191,24 @@ function AppRoutes() {
             </ProtectedRoute>
           }
         />
+
+        {/* Full-screen overlay, không nằm trong AppShellLayout — xem mục 3 web-frontend-plan.md */}
+        <Route
+          path="/settings"
+          element={
+            <ProtectedRoute>
+              <SettingsLayout />
+            </ProtectedRoute>
+          }
+        >
+          <Route index element={<Navigate to="profile" replace />} />
+          <Route path="profile" element={<SettingsProfile />} />
+          <Route path="username" element={<SettingsUsername />} />
+          <Route path="password" element={<SettingsPassword />} />
+          <Route path="blocked" element={<SettingsBlocked />} />
+          <Route path="appearance" element={<SettingsAppearance />} />
+          <Route path="deactivate" element={<SettingsDeactivate />} />
+        </Route>
 
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>

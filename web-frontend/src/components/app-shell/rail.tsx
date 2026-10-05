@@ -1,6 +1,5 @@
 import { LogOut, MessageCircle, Settings, Users } from "lucide-react";
-import { Link, useLocation } from "react-router-dom";
-import { toast } from "sonner";
+import { Link, useLocation, useNavigate } from "react-router-dom";
 import { NotificationsBell } from "@/components/notifications-bell";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import {
@@ -39,6 +38,7 @@ function RailLink({
 
 export function Rail() {
   const location = useLocation();
+  const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
 
   const initials = (user?.displayName ?? "?").trim().slice(0, 1).toUpperCase();
@@ -72,7 +72,7 @@ export function Rail() {
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent side="right" align="end">
-          <DropdownMenuItem onClick={() => toast("Cài đặt sẽ có ở milestone sau")}>
+          <DropdownMenuItem onClick={() => navigate("/settings")}>
             <Settings />
             Cài đặt
           </DropdownMenuItem>
