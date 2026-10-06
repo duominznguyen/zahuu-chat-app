@@ -8,9 +8,11 @@
     "scheme": "zahuu",
     "userInterfaceStyle": "automatic",
     "ios": {
-      "icon": "./assets/expo.icon"
+      "icon": "./assets/expo.icon",
+      "bundleIdentifier": "com.duominznguyen.zahuu"
     },
     "android": {
+      "package": "com.duominznguyen.zahuu",
       "adaptiveIcon": {
         "backgroundColor": "#E6F4FE",
         "foregroundImage": "./assets/images/android-icon-foreground.png",
@@ -34,7 +36,15 @@
         }
       ],
       "expo-video",
-      "expo-sharing"
+      "expo-sharing",
+      "@livekit/react-native-expo-plugin",
+      [
+        "@config-plugins/react-native-webrtc",
+        {
+          "cameraPermission": "Zahuu cần quyền camera để gọi video.",
+          "microphonePermission": "Zahuu cần quyền micro để gọi thoại và gọi video."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,

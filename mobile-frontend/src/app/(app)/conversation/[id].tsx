@@ -1,3 +1,4 @@
+import { Ionicons } from "@expo/vector-icons";
 import * as Clipboard from "expo-clipboard";
 import * as DocumentPicker from "expo-document-picker";
 import { Image } from "expo-image";
@@ -20,6 +21,7 @@ import {
   StyleSheet,
   Text,
   View,
+  useColorScheme,
 } from "react-native";
 
 import {
@@ -52,7 +54,11 @@ import {
   type MessagesPage,
   type ReactionType,
 } from "@/lib/messages";
+import { beginCall, joinExistingCall } from "@/lib/call-actions";
+import { isCallingSupported } from "@/lib/calling-support";
 import { downloadAndShare, uploadMedia } from "@/lib/media";
+import { systemMessageText } from "@/lib/system-message";
+import { useCallStore } from "@/store/call-store";
 import { useSocket } from "@/providers/socket-provider";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -180,6 +186,8 @@ export default function Conversation() {
   const queryClient = useQueryClient();
   const toast = useToast();
   const myId = useAuthStore((s) => s.user?.id);
+  const colorScheme = useColorScheme();
+  const activeCallId = useCallStore((s) => s.active?.callId);
 
   const [replyTarget, setReplyTarget] = useState<Message | null>(null);
   const [menuTarget, setMenuTarget] = useState<Message | null>(null);
@@ -565,6 +573,17 @@ export default function Conversation() {
   const headerSubtitle =
     isDirect && otherMember?.isOnline ? "Đang hoạt động" : undefined;
 
+  const iconColor = colorScheme === "dark" ? "#f4f4f5" : "#18181b";
+  // Banner "Tham gia" chỉ cho cuộc gọi đã có người nghe mà mình chưa ở trong đó —
+  // cuộc gọi đang đổ chuông đã có overlay/banner nhận cuộc gọi riêng.
+  const callInfo = detailQuery.data?.activeCall;
+  const ongoingCall =
+    isCallingSupported &&
+    callInfo?.status === "ONGOING" &&
+    callInfo.id !== activeCallId
+      ? callInfo
+      : null;
+
   const typingNames = typingUserIds.map(
     (uid) =>
       detailQuery.data?.members.find((m) => m.id === uid)?.displayName ??
@@ -640,11 +659,55 @@ export default function Conversation() {
         subtitle={headerSubtitle}
         onTitlePress={() => router.push(`/conversation-info/${id}`)}
         right={
-          <Pressable onPress={() => router.push(`/conversation-info/${id}`)}>
-            <Avatar name={title} uri={detailQuery.data?.avatarUrl} size={32} />
-          </Pressable>
+          <View className="flex-row items-center gap-1">
+            {isCallingSupported && (
+              <>
+                <Pressable
+                  accessibilityLabel="Gọi thoại"
+                  onPress={() => void beginCall(id, "AUDIO")}
+                  className="h-10 w-10 items-center justify-center"
+                >
+                  <Ionicons name="call-outline" size={22} color={iconColor} />
+                </Pressable>
+                <Pressable
+                  accessibilityLabel="Gọi video"
+                  onPress={() => void beginCall(id, "VIDEO")}
+                  className="h-10 w-10 items-center justify-center"
+                >
+                  <Ionicons
+                    name="videocam-outline"
+                    size={24}
+                    color={iconColor}
+                  />
+                </Pressable>
+              </>
+            )}
+            <Pressable onPress={() => router.push(`/conversation-info/${id}`)}>
+              <Avatar
+                name={title}
+                uri={detailQuery.data?.avatarUrl}
+                size={32}
+              />
+            </Pressable>
+          </View>
         }
       />
+
+      {ongoingCall && (
+        <View className="flex-row items-center justify-between bg-success px-4 py-2">
+          <Text className="text-sm font-medium text-white">
+            Cuộc gọi đang diễn ra
+          </Text>
+          <Pressable
+            onPress={() =>
+              void joinExistingCall(ongoingCall.id, id, ongoingCall.type)
+            }
+            className="rounded-full bg-white/20 px-3 py-1 active:opacity-70"
+          >
+            <Text className="text-sm font-semibold text-white">Tham gia</Text>
+          </Pressable>
+        </View>
+      )}
 
       <View className="flex-1">
         {detailQuery.data?.backgroundUrl && (
@@ -681,11 +744,20 @@ export default function Conversation() {
               // (chỉ GROUP) hiện ở tin ĐẦU chuỗi (trên cùng) — giống Messenger.
               const nextMessage = messages[index - 1];
               const prevMessage = messages[index + 1];
+              // Tin SYSTEM xen giữa cắt chuỗi, kể cả khi người thực hiện hành
+              // động chính là người gửi tin liền kề.
               const showAvatar =
-                !nextMessage || nextMessage.sender.id !== item.sender.id;
+                !nextMessage ||
+                nextMessage.type === "SYSTEM" ||
+                nextMessage.sender.id !== item.sender.id;
               const showSenderName =
                 !isDirect &&
-                (!prevMessage || prevMessage.sender.id !== item.sender.id);
+                (!prevMessage ||
+                  prevMessage.type === "SYSTEM" ||
+                  prevMessage.sender.id !== item.sender.id);
+              // Tin SYSTEM/CALL không thu hồi/react/trả lời được nên không mở menu.
+              const isInteractive =
+                item.type !== "SYSTEM" && item.type !== "CALL";
               return (
                 <View>
                   <MessageBubble
@@ -694,7 +766,23 @@ export default function Conversation() {
                     senderAvatarUrl={item.sender.avatarUrl}
                     showAvatar={showAvatar}
                     showSenderName={showSenderName}
-                    onLongPress={() => setMenuTarget(item)}
+                    systemText={
+                      item.type === "SYSTEM" && item.content
+                        ? systemMessageText(
+                            item.content,
+                            item.sender,
+                            detailQuery.data?.members ?? [],
+                          )
+                        : undefined
+                    }
+                    onLongPress={
+                      isInteractive ? () => setMenuTarget(item) : undefined
+                    }
+                    onCallBack={
+                      isCallingSupported && item.call
+                        ? () => void beginCall(id, item.call!.type)
+                        : undefined
+                    }
                     onLinkPress={handleLinkPress}
                     onPress={
                       item.mediaUrl
@@ -719,6 +807,7 @@ export default function Conversation() {
                       mediaUrl: item.mediaUrl,
                       mediaName: item.mediaName,
                       mediaSize: item.mediaSize,
+                      call: item.call,
                       isRecalled: item.isRecalled,
                       replyTo: item.replyTo
                         ? {

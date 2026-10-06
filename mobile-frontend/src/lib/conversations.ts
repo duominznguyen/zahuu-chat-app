@@ -1,15 +1,19 @@
 import { apiClient } from "./api-client";
+import type { ActiveCallInfo } from "./calls";
 import type { PublicUser } from "./friends";
+import type { MessageType } from "./messages";
 
 export type ConversationType = "DIRECT" | "GROUP";
 export type MemberRole = "ADMIN" | "MEMBER";
 
 export interface MessagePreview {
   id: string;
-  type: "TEXT" | "IMAGE" | "VIDEO" | "FILE" | "STICKER";
+  type: MessageType;
   content: string | null;
   isRecalled: boolean;
   senderId: string;
+  // Câu tiếng Việt backend dịch sẵn, chỉ có cho tin SYSTEM/CALL.
+  previewText: string | null;
 }
 
 export interface ConversationSummary {
@@ -55,6 +59,8 @@ export interface ConversationDetail {
   createdAt: string;
   role: MemberRole | null;
   members: ConversationMember[];
+  // Cuộc gọi đang đổ chuông/diễn ra, để hiện banner "Tham gia" trên header.
+  activeCall: ActiveCallInfo | null;
 }
 
 export function getConversationDetail(id: string) {

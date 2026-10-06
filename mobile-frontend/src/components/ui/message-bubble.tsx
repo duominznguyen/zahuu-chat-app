@@ -1,11 +1,16 @@
-import { Ionicons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
 import { Image, type ImageLoadEventData } from "expo-image";
 import { useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
 
-import { Avatar } from "./avatar";
+import {
+  callSubtitle,
+  callTitle,
+  type CallSummary,
+} from "@/lib/calls";
+import type { MessageType } from "@/lib/messages";
 
-export type MessageType = "TEXT" | "IMAGE" | "VIDEO" | "FILE" | "STICKER";
+import { Avatar } from "./avatar";
 
 export interface MessageBubbleData {
   id: string;
@@ -14,6 +19,7 @@ export interface MessageBubbleData {
   mediaUrl?: string | null;
   mediaName?: string | null;
   mediaSize?: number | null;
+  call?: CallSummary | null;
   isRecalled: boolean;
   replyTo: { content: string | null; isRecalled: boolean } | null;
   reactionEmojis?: string[]; // vd ['like', 'love'] — đã gộp sẵn, không trùng
@@ -38,6 +44,10 @@ interface MessageBubbleProps {
   // hành vì scheme tùy biến cần rebuild native mới nhận, không phải lúc nào
   // cũng sẵn sàng).
   onLinkPress?: (url: string) => void;
+  // Câu đã dịch của tin SYSTEM — màn gọi tự dịch vì cần danh sách thành viên.
+  systemText?: string;
+  // Không truyền thì ẩn nút "Gọi lại" (vd thiết bị không hỗ trợ gọi điện).
+  onCallBack?: () => void;
 }
 
 const AVATAR_SIZE = 28;
@@ -160,6 +170,55 @@ function clusterMarginClass(isLastInCluster: boolean) {
   return isLastInCluster ? "mb-3" : "mb-1";
 }
 
+type CallIconName = keyof typeof MaterialCommunityIcons.glyphMap;
+
+function callIconName(call: CallSummary): CallIconName {
+  const isVideo = call.type === "VIDEO";
+  if (call.status === "MISSED") return isVideo ? "video-off" : "phone-missed";
+  if (call.status === "DECLINED") return isVideo ? "video-off" : "phone-off";
+  return isVideo ? "video" : "phone";
+}
+
+function CallCard({
+  call,
+  onCallBack,
+}: {
+  call: CallSummary;
+  onCallBack?: () => void;
+}) {
+  return (
+    <View className="w-56 rounded-2xl bg-zinc-100 p-3 dark:bg-zinc-800">
+      <View className="flex-row items-center gap-3">
+        <View className="size-9 items-center justify-center rounded-full bg-white dark:bg-zinc-700">
+          <MaterialCommunityIcons
+            name={callIconName(call)}
+            size={18}
+            color="#71717a"
+          />
+        </View>
+        <View className="shrink">
+          <Text className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+            {callTitle(call)}
+          </Text>
+          <Text className="text-xs text-zinc-500 dark:text-zinc-400">
+            {callSubtitle(call)}
+          </Text>
+        </View>
+      </View>
+      {onCallBack && (
+        <Pressable
+          onPress={onCallBack}
+          className="mt-3 items-center rounded-xl bg-white py-2 active:opacity-70 dark:bg-zinc-700"
+        >
+          <Text className="text-sm font-medium text-zinc-900 dark:text-zinc-100">
+            Gọi lại
+          </Text>
+        </Pressable>
+      )}
+    </View>
+  );
+}
+
 export function MessageBubble({
   message,
   isOwn,
@@ -170,7 +229,45 @@ export function MessageBubble({
   onLongPress,
   onPress,
   onLinkPress,
+  systemText,
+  onCallBack,
 }: MessageBubbleProps) {
+  // Tin SYSTEM không thuộc chuỗi tin của ai: không avatar, không menu.
+  if (message.type === "SYSTEM") {
+    return (
+      <Text className="my-2 px-6 text-center text-xs text-zinc-500 dark:text-zinc-400">
+        {systemText}
+      </Text>
+    );
+  }
+
+  if (message.type === "CALL" && message.call) {
+    return (
+      <View className={clusterMarginClass(showAvatar)}>
+        {!isOwn && showSenderName && (
+          <Text className="mb-0.5 ml-9 text-xs font-medium text-zinc-500 dark:text-zinc-400">
+            {senderName}
+          </Text>
+        )}
+        <View
+          className={`flex-row items-end gap-2 ${isOwn ? "justify-end" : "justify-start"}`}
+        >
+          {!isOwn &&
+            (showAvatar ? (
+              <Avatar
+                uri={senderAvatarUrl}
+                name={senderName}
+                size={AVATAR_SIZE}
+              />
+            ) : (
+              <View style={{ width: AVATAR_SIZE }} />
+            ))}
+          <CallCard call={message.call} onCallBack={onCallBack} />
+        </View>
+      </View>
+    );
+  }
+
   if (message.isRecalled) {
     return (
       <View className={clusterMarginClass(showAvatar)}>
