@@ -1,7 +1,7 @@
 import type { InfiniteData } from "@tanstack/react-query";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info, MessageCircle, Phone, Video, X } from "lucide-react";
-import { useEffect, useRef, useState, type DragEvent } from "react";
+import { Fragment, useEffect, useRef, useState, type DragEvent } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { rootBackground } from "@/lib/background-location";
 import { toast } from "sonner";
@@ -12,6 +12,7 @@ import { ErrorState } from "@/components/error-state";
 import { InfiniteScrollSentinel } from "@/components/infinite-scroll-sentinel";
 import { MediaViewer } from "@/components/media-viewer";
 import { MessageBubble } from "@/components/message-bubble";
+import { SeenByRow } from "@/components/seen-by-row";
 import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
 import { ApiError } from "@/lib/api-client";
@@ -218,6 +219,9 @@ export default function Conversation() {
     queryFn: ({ pageParam }: { pageParam?: string }) => listMessages(id, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    // Khi mở hội thoại không ở trong room, socket có thể đã bỏ lỡ tin mới — cache cũ
+    // sẽ khiến "đánh dấu đã đọc" gửi ID tin cũ. Luôn lấy mới để đánh dấu đúng tin mới nhất.
+    staleTime: 0,
   });
 
   const messages = messagesQuery.data?.pages.flatMap((p) => p.items) ?? [];
@@ -225,15 +229,21 @@ export default function Conversation() {
   const markReadIfNeeded = (messageId: string) => {
     if (lastMarkedReadId.current === messageId) return;
     lastMarkedReadId.current = messageId;
-    markRead(id, messageId).catch(() => {
-      lastMarkedReadId.current = null;
-    });
+    // Danh sách hội thoại tự suy "chưa đọc" từ lastReadMessageId — không có socket nào
+    // báo cho List Pane khi chính mình đọc, nên phải làm mới ngay sau khi đánh dấu.
+    markRead(id, messageId)
+      .then(() => queryClient.invalidateQueries({ queryKey: ["conversations", "list"] }))
+      .catch(() => {
+        lastMarkedReadId.current = null;
+      });
   };
 
+  // Ở cửa sổ tin cũ, messages[0] là tin mới nhất của CỬA SỔ chứ không phải của đoạn
+  // chat — đánh dấu đã đọc theo nó sẽ lùi con trỏ đã đọc của người dùng.
   useEffect(() => {
-    if (messages.length > 0) markReadIfNeeded(messages[0].id);
+    if (messages.length > 0 && !hasNewerWindow) markReadIfNeeded(messages[0].id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages[0]?.id]);
+  }, [messages[0]?.id, hasNewerWindow]);
 
   useEffect(() => {
     if (!socket) return;
@@ -241,12 +251,15 @@ export default function Conversation() {
 
     const onNew = (message: Message) => {
       if (message.conversationId !== id) return;
+      // Tin mới nhất đổi nên người đã xem tin neo cũng đổi — luôn làm mới detail,
+      // kể cả khi đang ở cửa sổ tin cũ (không chèn tin nhưng vẫn cần seenBy đúng).
+      queryClient.invalidateQueries({ queryKey: ["conversations", "detail", id] });
       // Đang ở cửa sổ tin cũ: chèn vào đầu cache sẽ đặt tin sai chỗ (sau khoảng trống).
       // Bỏ qua — bấm "Đến tin mới nhất" để tải lại đầy đủ.
       if (!newerWindowRef.current) {
         queryClient.setQueryData<MessagesCache>(["messages", id], (old) => prependMessage(old, message));
+        if (message.sender.id !== myId) markReadIfNeeded(message.id);
       }
-      if (message.sender.id !== myId) markReadIfNeeded(message.id);
     };
     const onRecalled = ({ messageId }: { messageId: string; conversationId: string }) => {
       queryClient.setQueryData<MessagesCache>(["messages", id], (old) => applyRecall(old, messageId));
@@ -269,14 +282,9 @@ export default function Conversation() {
         })),
       );
     };
-    const onRead = ({ userId, lastReadMessageId }: { userId: string; lastReadMessageId: string }) => {
-      queryClient.setQueryData<ConversationDetail>(["conversations", "detail", id], (old) => {
-        if (!old) return old;
-        return {
-          ...old,
-          members: old.members.map((m) => (m.id === userId ? { ...m, lastReadMessageId } : m)),
-        };
-      });
+    // seenBy được backend tính theo tin neo, không suy được từ payload read — làm mới detail.
+    const onRead = () => {
+      queryClient.invalidateQueries({ queryKey: ["conversations", "detail", id] });
     };
     const onPresence = ({ userId, isOnline }: { userId: string; isOnline: boolean }) => {
       queryClient.setQueryData<ConversationDetail>(["conversations", "detail", id], (old) => {
@@ -423,6 +431,8 @@ export default function Conversation() {
       queryClient.setQueryData<MessagesCache>(["messages", id], (old) =>
         removeMessageFromCache(old, messageId),
       );
+      // Xoá tin neo của chính mình làm đổi tin neo của seenBy — không có socket nên phải tự làm mới.
+      queryClient.invalidateQueries({ queryKey: ["conversations", "detail", id] });
     },
   });
 
@@ -454,6 +464,10 @@ export default function Conversation() {
   const mediaItems = messages
     .filter((m) => (m.type === "IMAGE" || m.type === "VIDEO") && !m.isRecalled && m.mediaUrl)
     .map((m) => ({ id: m.id, url: m.mediaUrl!, type: m.type as "IMAGE" | "VIDEO" }));
+
+  // Hàng avatar hiện dưới tin neo. Tin neo có thể không nằm trong cửa sổ đã tải
+  // (đang xem tin cũ) — khi đó không hiện, về tin mới nhất sẽ hiện lại.
+  const seenBy = detailQuery.data?.seenBy;
 
   return (
     <div
@@ -549,7 +563,6 @@ export default function Conversation() {
             )}
             {messages.map((item, index) => {
               const isOwn = item.sender.id === myId;
-              const seen = isOwn && otherMember?.lastReadMessageId === item.id;
               // messages mới nhất trước (index 0) — nhờ flex-col-reverse nên
               // index 0 hiện ở DƯỚI CÙNG (giống inverted list bên mobile): tin
               // ở index-1 mới hơn (hiện dưới tin này), index+1 cũ hơn (hiện
@@ -567,33 +580,36 @@ export default function Conversation() {
                 (!prevMessage || prevMessage.type === "SYSTEM" || prevMessage.sender.id !== item.sender.id);
               const myReaction = item.reactions.find((r) => r.userId === myId)?.reactionType;
 
+              // Trong flex-col-reverse, phần tử đặt TRƯỚC trong DOM nằm DƯỚI — nên
+              // hàng avatar phải đứng trước bubble để hiện dưới tin neo.
               return (
-                <MessageBubble
-                  key={item.id}
-                  message={item}
-                  isOwn={isOwn}
-                  showAvatar={showAvatar}
-                  showSenderName={showSenderName}
-                  seen={!!seen}
-                  isHighlighted={highlightedId === item.id}
-                  members={detailQuery.data?.members ?? []}
-                  myReaction={myReaction}
-                  onReply={() => setReplyTarget(item)}
-                  onReact={(type) => reactMutation.mutate({ messageId: item.id, reactionType: type })}
-                  onRemoveReaction={() => removeReactionMutation.mutate(item.id)}
-                  onRecall={async () => {
-                    const ok = await confirm({
-                      title: "Thu hồi tin nhắn?",
-                      destructive: true,
-                      confirmLabel: "Thu hồi",
-                    });
-                    if (ok) recallMutation.mutate(item.id);
-                  }}
-                  onDelete={() => deleteMutation.mutate(item.id)}
-                  onOpenMedia={() => setViewerMessageId(item.id)}
-                  onDownloadFile={() => downloadFile(item.mediaUrl!, item.mediaName ?? undefined)}
-                  onJumpToMessage={handleJumpToMessage}
-                />
+                <Fragment key={item.id}>
+                  {seenBy && seenBy.messageId === item.id && seenBy.count > 0 && <SeenByRow seenBy={seenBy} />}
+                  <MessageBubble
+                    message={item}
+                    isOwn={isOwn}
+                    showAvatar={showAvatar}
+                    showSenderName={showSenderName}
+                    isHighlighted={highlightedId === item.id}
+                    members={detailQuery.data?.members ?? []}
+                    myReaction={myReaction}
+                    onReply={() => setReplyTarget(item)}
+                    onReact={(type) => reactMutation.mutate({ messageId: item.id, reactionType: type })}
+                    onRemoveReaction={() => removeReactionMutation.mutate(item.id)}
+                    onRecall={async () => {
+                      const ok = await confirm({
+                        title: "Thu hồi tin nhắn?",
+                        destructive: true,
+                        confirmLabel: "Thu hồi",
+                      });
+                      if (ok) recallMutation.mutate(item.id);
+                    }}
+                    onDelete={() => deleteMutation.mutate(item.id)}
+                    onOpenMedia={() => setViewerMessageId(item.id)}
+                    onDownloadFile={() => downloadFile(item.mediaUrl!, item.mediaName ?? undefined)}
+                    onJumpToMessage={handleJumpToMessage}
+                  />
+                </Fragment>
               );
             })}
             <InfiniteScrollSentinel

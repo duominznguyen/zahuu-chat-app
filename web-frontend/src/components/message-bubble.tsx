@@ -124,7 +124,6 @@ interface MessageBubbleProps {
   isOwn: boolean;
   showAvatar: boolean;
   showSenderName: boolean;
-  seen: boolean;
   isHighlighted: boolean;
   members: ConversationMember[];
   myReaction?: ReactionType;
@@ -143,7 +142,6 @@ export function MessageBubble({
   isOwn,
   showAvatar,
   showSenderName,
-  seen,
   isHighlighted,
   members,
   myReaction,
@@ -182,9 +180,9 @@ export function MessageBubble({
     return (
       <div id={`message-${message.id}`} className={clusterMarginClass(showAvatar)}>
         {!isOwn && showSenderName && (
-          <p className="mb-0.5 ml-9 text-xs font-medium text-muted-foreground">{message.sender.displayName}</p>
+          <p className="mb-0.5 ml-10 text-xs font-medium text-muted-foreground">{message.sender.displayName}</p>
         )}
-        <div className={`flex items-end gap-2 ${isOwn ? "justify-end" : "justify-start"}`}>
+        <div className={`flex items-center gap-2 ${isOwn ? "justify-end" : "justify-start"}`}>
           {!isOwn &&
             (showAvatar ? (
               <button type="button" aria-label={`Xem hồ sơ ${message.sender.displayName}`} onClick={openSenderProfile} className="shrink-0 rounded-full">
@@ -260,11 +258,11 @@ export function MessageBubble({
   return (
     <div id={`message-${message.id}`} className={clusterMarginClass(showAvatar)}>
       {!isOwn && showSenderName && (
-        <p className="mb-0.5 ml-9 text-xs font-medium text-muted-foreground">
+        <p className="mb-0.5 ml-10 text-xs font-medium text-muted-foreground">
           {message.sender.displayName}
         </p>
       )}
-      <div className={`group/bubble flex items-end gap-2 ${isOwn ? "justify-end" : "justify-start"}`}>
+      <div className={`group/bubble flex items-center gap-2 ${isOwn ? "justify-end" : "justify-start"}`}>
         {!isOwn &&
           (showAvatar ? (
             <button type="button" aria-label={`Xem hồ sơ ${message.sender.displayName}`} onClick={openSenderProfile} className="shrink-0 rounded-full">
@@ -350,8 +348,6 @@ export function MessageBubble({
 
         {!isOwn && menuButton}
       </div>
-
-      {seen && <p className="-mt-1 mb-2 text-right text-xs text-muted-foreground">Đã xem</p>}
     </div>
   );
 }

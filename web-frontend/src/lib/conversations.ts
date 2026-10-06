@@ -50,6 +50,13 @@ export interface ConversationMember extends PublicUser {
   isOnline: boolean;
 }
 
+// Tin neo là tin mới nhất viewer còn thấy; `users` tối đa 5, `count` là tổng số người đã xem.
+export interface SeenBy {
+  messageId: string;
+  users: PublicUser[];
+  count: number;
+}
+
 export interface ConversationDetail {
   id: string;
   type: ConversationType;
@@ -61,6 +68,7 @@ export interface ConversationDetail {
   role: MemberRole | null;
   members: ConversationMember[];
   activeCall: ActiveCallInfo | null;
+  seenBy: SeenBy | null;
 }
 
 export function getConversationDetail(id: string) {

@@ -26,6 +26,7 @@ import { MediaService } from '../media/media.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { UpdateBackgroundDto } from './dto/update-background.dto.js';
 import type { UpdateConversationDto } from './dto/update-conversation.dto.js';
+import { pickSeenBy } from './seen-by.js';
 
 const publicUserSelect = {
   id: true,
@@ -188,8 +189,11 @@ export class ConversationsService {
       select: { id: true, type: true, status: true, startedById: true },
     });
 
+    const seenBy = await this.loadSeenBy(conv.id, viewerId, conv.lastMessageId);
+
     const base = {
       activeCall,
+      seenBy,
       id: conv.id,
       type: conv.type,
       backgroundUrl: conv.backgroundUrl,
@@ -208,6 +212,78 @@ export class ConversationsService {
       name: other?.nickname ?? other?.displayName ?? null,
       avatarUrl: other?.avatarUrl ?? null,
     };
+  }
+
+  // Người đã xem = cursor đọc đã tới tin neo trở lên. Neo là tin mới nhất
+  // mà viewer còn thấy (không bị xoá-cho-mình), để hàng avatar không biến mất
+  // khi người xem xoá tin mới nhất của đoạn chat.
+  private async loadSeenBy(
+    conversationId: string,
+    viewerId: string,
+    lastMessageId: string | null,
+  ) {
+    const anchor = await this.findSeenAnchor(
+      conversationId,
+      viewerId,
+      lastMessageId,
+    );
+    if (!anchor) return null;
+
+    const readers = await this.prisma.conversationMember.findMany({
+      where: {
+        conversationId,
+        userId: { notIn: [viewerId, anchor.senderId] },
+        lastReadMessageId: { not: null },
+        user: { deactivatedAt: null },
+      },
+      select: {
+        userId: true,
+        lastReadMessageId: true,
+        user: { select: publicUserSelect },
+      },
+    });
+    if (readers.length === 0) {
+      return { messageId: anchor.id, users: [], count: 0 };
+    }
+
+    // Cần createdAt của cursor để so tuple (createdAt, id) với tin neo.
+    const cursors = await this.prisma.message.findMany({
+      where: { id: { in: readers.map((r) => r.lastReadMessageId!) } },
+      select: { id: true, createdAt: true },
+    });
+    const cursorById = new Map(cursors.map((c) => [c.id, c]));
+
+    const candidates = readers.flatMap((r) => {
+      const cursor = cursorById.get(r.lastReadMessageId!);
+      return cursor ? [{ userId: r.userId, cursor, user: r.user }] : [];
+    });
+
+    const { users, count } = pickSeenBy(anchor, candidates, viewerId);
+    return { messageId: anchor.id, users, count };
+  }
+
+  private async findSeenAnchor(
+    conversationId: string,
+    viewerId: string,
+    lastMessageId: string | null,
+  ) {
+    const select = { id: true, createdAt: true, senderId: true } as const;
+    const visibleToViewer = { deletions: { none: { userId: viewerId } } };
+
+    // Đường nhanh: conv.lastMessageId thường chính là tin neo, tránh query sắp xếp.
+    if (lastMessageId) {
+      const last = await this.prisma.message.findFirst({
+        where: { id: lastMessageId, ...visibleToViewer },
+        select,
+      });
+      if (last) return last;
+    }
+
+    return this.prisma.message.findFirst({
+      where: { conversationId, ...visibleToViewer },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select,
+    });
   }
 
   async createDirect(userId: string, friendId: string) {
@@ -1046,8 +1122,10 @@ export class ConversationsService {
     const me = conv.members.find((m) => m.userId === viewerId);
     // Không đếm số tin chưa đọc chính xác (tốn 1 query COUNT/conversation) — chỉ
     // cần biết CÓ tin chưa đọc hay không, giống cách lastReadMessageId đã đơn giản hoá.
+    // Tin cuối do chính người xem gửi thì không bao giờ là "chưa đọc" với họ.
     const unread =
       conv.lastMessage !== null &&
+      conv.lastMessage.senderId !== viewerId &&
       conv.lastMessage.id !== me?.lastReadMessageId;
     const lastMessage = conv.lastMessage && {
       id: conv.lastMessage.id,
