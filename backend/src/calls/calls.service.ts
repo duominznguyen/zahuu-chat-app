@@ -6,6 +6,7 @@ import {
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomUUID } from 'node:crypto';
 import { assertCallerActive } from '../common/assert-caller-active.js';
+import { assertDirectNotBlocked } from '../common/direct-block.js';
 import { isUniqueViolation } from '../common/prisma-errors.js';
 import type { Prisma } from '../generated/prisma/client.js';
 import {
@@ -62,6 +63,7 @@ export class CallsService {
 
   async startCall(conversationId: string, userId: string, type: CallType) {
     await assertCallerActive(this.prisma, userId);
+    await assertDirectNotBlocked(this.prisma, conversationId);
 
     const callId = randomUUID();
     const livekitRoomName = `call-${callId}`;
@@ -137,6 +139,8 @@ export class CallsService {
         message: 'Cuộc gọi đã kết thúc',
       });
     }
+    // Chặn ngay giữa lúc đang đổ chuông thì không cho bắt máy nữa.
+    await assertDirectNotBlocked(this.prisma, call.conversationId);
     const me = call.participants.find((p) => p.userId === userId)!;
     if (me.joinedAt === null && me.leftAt !== null) {
       throw new ConflictException({

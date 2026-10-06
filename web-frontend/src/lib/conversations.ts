@@ -69,6 +69,8 @@ export interface ConversationDetail {
   members: ConversationMember[];
   activeCall: ActiveCallInfo | null;
   seenBy: SeenBy | null;
+  // false khi là DIRECT và 2 người đang chặn nhau (không nói ai chặn ai).
+  canMessage: boolean;
 }
 
 export function getConversationDetail(id: string) {
@@ -150,4 +152,16 @@ export interface InviteLinkPreview {
 
 export function previewInviteLink(token: string) {
   return apiClient.get<InviteLinkPreview>(`/invite-links/${token}`);
+}
+
+export const DIRECT_BLOCKED_MESSAGE = "Hiện không thể liên lạc với người này";
+
+export interface ConversationSearchResult {
+  groups: { id: string; name: string | null; avatarUrl: string | null; memberCount: number }[];
+  // Chat 1-1 với người CHƯA là bạn — bạn bè tìm qua searchFriendsByName.
+  directs: { id: string; name: string; avatarUrl: string | null; otherUser: { id: string; username: string } }[];
+}
+
+export function searchConversations(q: string) {
+  return apiClient.get<ConversationSearchResult>(`/conversations/search?q=${encodeURIComponent(q)}`);
 }

@@ -9,6 +9,8 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomBytes } from 'node:crypto';
 import { assertActiveUser } from '../common/assert-active-user.js';
 import { assertCallerActive } from '../common/assert-caller-active.js';
+import { escapeLike } from '../common/escape-like.js';
+import { isDirectBlocked } from '../common/direct-block.js';
 import { isUniqueViolation } from '../common/prisma-errors.js';
 import { orderedPair } from '../common/ordered-pair.js';
 import type { ConversationMembership } from './decorators/membership.decorator.js';
@@ -65,6 +67,7 @@ type SystemMessageContent = {
 };
 
 const LIST_DEFAULT_LIMIT = 30;
+const SEARCH_LIMIT = 20;
 
 @Injectable()
 export class ConversationsService {
@@ -79,7 +82,15 @@ export class ConversationsService {
     const take = limit ?? LIST_DEFAULT_LIMIT;
 
     const conversations = await this.prisma.conversation.findMany({
-      where: { members: { some: { userId } } },
+      where: {
+        members: { some: { userId } },
+        // DIRECT chưa có tin nào (vừa mở từ ô tìm kiếm/profile) chưa hiện ra,
+        // để người kia không thấy 1 đoạn chat rỗng chỉ vì mình bấm vào.
+        OR: [
+          { type: ConversationType.GROUP },
+          { lastMessageId: { not: null } },
+        ],
+      },
       orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
       take: take + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -136,7 +147,8 @@ export class ConversationsService {
 
     // Socket chỉ báo được lúc CHUYỂN trạng thái online/offline, không có cách
     // nào biết trạng thái HIỆN TẠI lúc mới load trang — phải tự tra Redis.
-    const onlineMap = await this.presence.isOnlineBatch(
+    const onlineMap = await this.friendsOnlineMap(
+      userId,
       directTargets.map((t) => t.targetUserId),
     );
 
@@ -144,6 +156,104 @@ export class ConversationsService {
       this.toSummary(c, userId, nicknameMap, onlineMap),
     );
     return { items, nextCursor: hasMore ? page[page.length - 1].id : null };
+  }
+
+  // Ô tìm kiếm của danh sách chat: nhóm theo tên nhóm + chat 1-1 với người
+  // CHƯA là bạn (bạn bè đã có mục riêng qua GET /friends/search, tránh trùng).
+  // Chỉ trong các conversation người dùng đang là thành viên.
+  async searchConversations(userId: string, q: string) {
+    const needle = escapeLike(q);
+    const otherMember = { userId: { not: userId } };
+    // Người kia không phải bạn của userId — Friendship lưu cặp có thứ tự nên
+    // phải loại cả 2 chiều.
+    const notFriend = {
+      friendshipsAsUser1: { none: { userId2: userId } },
+      friendshipsAsUser2: { none: { userId1: userId } },
+    };
+
+    const [groups, directs] = await Promise.all([
+      this.prisma.conversation.findMany({
+        where: {
+          type: ConversationType.GROUP,
+          members: { some: { userId } },
+          name: { contains: needle },
+        },
+        orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+        take: SEARCH_LIMIT,
+        select: {
+          id: true,
+          name: true,
+          avatarUrl: true,
+          _count: { select: { members: true } },
+        },
+      }),
+      this.prisma.conversation.findMany({
+        where: {
+          type: ConversationType.DIRECT,
+          // Giống danh sách chat: DIRECT chưa có tin nào coi như chưa tồn tại.
+          lastMessageId: { not: null },
+          AND: [
+            { members: { some: { userId } } },
+            { members: { some: { ...otherMember, user: notFriend } } },
+            {
+              OR: [
+                {
+                  members: {
+                    some: {
+                      ...otherMember,
+                      user: { displayName: { contains: needle } },
+                    },
+                  },
+                },
+                // Tên hiển thị trong chat ưu tiên biệt danh nên cũng tìm theo nó.
+                {
+                  nicknames: {
+                    some: {
+                      targetUserId: { not: userId },
+                      nickname: { contains: needle },
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+        take: SEARCH_LIMIT,
+        select: {
+          id: true,
+          members: {
+            where: otherMember,
+            select: { user: { select: publicUserSelect } },
+          },
+          nicknames: {
+            where: { targetUserId: { not: userId } },
+            select: { nickname: true },
+          },
+        },
+      }),
+    ]);
+
+    return {
+      groups: groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        avatarUrl: g.avatarUrl,
+        memberCount: g._count.members,
+      })),
+      directs: directs.flatMap((c) => {
+        const other = c.members[0]?.user;
+        if (!other) return [];
+        return [
+          {
+            id: c.id,
+            name: c.nicknames[0]?.nickname ?? other.displayName,
+            avatarUrl: other.avatarUrl,
+            otherUser: { id: other.id, username: other.username },
+          },
+        ];
+      }),
+    };
   }
 
   async getConversationDetail(conversationId: string, viewerId: string) {
@@ -169,7 +279,10 @@ export class ConversationsService {
     const nicknameMap = new Map(
       conv.nicknames.map((n) => [n.targetUserId, n.nickname]),
     );
-    const onlineMap = await this.presence.isOnlineBatch(
+    // Client dùng để ẩn ô nhập/nút gọi thay vì để người dùng gõ rồi mới nhận 403.
+    const canMessage = !(await isDirectBlocked(this.prisma, conv.id));
+    const onlineMap = await this.friendsOnlineMap(
+      viewerId,
       conv.members.map((m) => m.userId),
     );
     const members = conv.members.map((m) => ({
@@ -194,6 +307,7 @@ export class ConversationsService {
     const base = {
       activeCall,
       seenBy,
+      canMessage,
       id: conv.id,
       type: conv.type,
       backgroundUrl: conv.backgroundUrl,
@@ -286,17 +400,20 @@ export class ConversationsService {
     });
   }
 
-  async createDirect(userId: string, friendId: string) {
-    if (userId === friendId) {
+  // Không yêu cầu là bạn bè: người lạ (tìm qua @username) cũng nhắn được.
+  // Conversation tạo ra chưa hiện trong danh sách của ai cho tới khi có tin
+  // đầu tiên (xem listConversations).
+  async createDirect(userId: string, otherUserId: string) {
+    if (userId === otherUserId) {
       throw new BadRequestException(
         'Không thể tạo cuộc trò chuyện với chính mình',
       );
     }
     await assertCallerActive(this.prisma, userId);
-    await assertActiveUser(this.prisma, friendId);
-    await this.assertFriends(userId, friendId);
+    await assertActiveUser(this.prisma, otherUserId);
+    await this.assertNotBlocked(userId, otherUserId);
 
-    const pair = orderedPair(userId, friendId);
+    const pair = orderedPair(userId, otherUserId);
     const existing = await this.prisma.conversation.findUnique({
       where: { userId1_userId2: pair },
       select: { id: true },
@@ -308,11 +425,11 @@ export class ConversationsService {
         data: {
           type: ConversationType.DIRECT,
           ...pair,
-          members: { create: [{ userId }, { userId: friendId }] },
+          members: { create: [{ userId }, { userId: otherUserId }] },
         },
         select: { id: true },
       });
-      await this.emitMembersAdded(conv.id, [userId, friendId], {
+      await this.emitMembersAdded(conv.id, [userId, otherUserId], {
         addedById: userId,
         notifiable: false,
       });
@@ -931,6 +1048,46 @@ export class ConversationsService {
     });
     if (!conv || conv.type !== ConversationType.GROUP) {
       throw new BadRequestException('Chỉ áp dụng cho group');
+    }
+  }
+
+  /** Trạng thái online chỉ dành cho bạn bè của viewer — người lạ (kể cả cùng
+   *  nhóm, hoặc đang chặn nhau) luôn vắng mặt trong map, tức là offline. Khớp
+   *  với presence:update vốn cũng chỉ gửi tới bạn bè. */
+  private async friendsOnlineMap(viewerId: string, userIds: string[]) {
+    const otherIds = userIds.filter((id) => id !== viewerId);
+    if (otherIds.length === 0) return new Map<string, boolean>();
+    const friendships = await this.prisma.friendship.findMany({
+      where: { OR: otherIds.map((id) => orderedPair(viewerId, id)) },
+      select: { userId1: true, userId2: true },
+    });
+    const friendIds = friendships.map((f) =>
+      f.userId1 === viewerId ? f.userId2 : f.userId1,
+    );
+    return this.presence.isOnlineBatch(friendIds);
+  }
+
+  // Cùng quy ước với gửi lời mời kết bạn: bị người kia chặn → 404 (giấu việc
+  // bị chặn), tự mình chặn người kia → 403 rõ ràng.
+  private async assertNotBlocked(userId: string, otherId: string) {
+    const blocks = await this.prisma.block.findMany({
+      where: {
+        OR: [
+          { blockerId: userId, blockedId: otherId },
+          { blockerId: otherId, blockedId: userId },
+        ],
+      },
+      select: { blockerId: true },
+    });
+    if (blocks.some((b) => b.blockerId === otherId)) {
+      throw new NotFoundException('Không tìm thấy người dùng');
+    }
+    if (blocks.length > 0) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'BLOCKED_BY_YOU',
+        message: 'Bạn đã chặn người này, hãy bỏ chặn trước khi nhắn tin',
+      });
     }
   }
 

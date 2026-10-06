@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import type { Queue } from 'bullmq';
+import { assertDirectNotBlocked } from '../common/direct-block.js';
 import type { ConversationMembership } from '../conversations/decorators/membership.decorator.js';
 import {
   CallStatus,
@@ -254,6 +255,7 @@ export class MessagesService {
   }
 
   async sendMessage(membership: ConversationMembership, dto: SendMessageDto) {
+    await assertDirectNotBlocked(this.prisma, membership.conversationId);
     if (dto.replyToId) {
       const replyTo = await this.prisma.message.findUnique({
         where: { id: dto.replyToId },

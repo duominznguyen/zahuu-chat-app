@@ -135,6 +135,8 @@ interface MessageBubbleProps {
   onOpenMedia: () => void;
   onDownloadFile: () => void;
   onJumpToMessage: (messageId: string) => void;
+  // false khi không thể gọi trong đoạn chat này (2 người đang chặn nhau) — ẩn nút "Gọi lại".
+  canCallBack: boolean;
 }
 
 export function MessageBubble({
@@ -153,6 +155,7 @@ export function MessageBubble({
   onOpenMedia,
   onDownloadFile,
   onJumpToMessage,
+  canCallBack,
 }: MessageBubbleProps) {
   const [menuOpen, setMenuOpen] = useState(false);
   const navigate = useNavigate();
@@ -201,13 +204,15 @@ export function MessageBubble({
                 <p className="text-xs text-muted-foreground">{callSubtitle(call)}</p>
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => void beginCall(message.conversationId, call.type)}
-              className="w-full rounded-xl bg-white py-2 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50 dark:bg-zinc-700 dark:hover:bg-zinc-600"
-            >
-              Gọi lại
-            </button>
+            {canCallBack && (
+              <button
+                type="button"
+                onClick={() => void beginCall(message.conversationId, call.type)}
+                className="w-full rounded-xl bg-white py-2 text-sm font-medium text-foreground transition-colors hover:bg-zinc-50 dark:bg-zinc-700 dark:hover:bg-zinc-600"
+              >
+                Gọi lại
+              </button>
+            )}
           </div>
         </div>
       </div>

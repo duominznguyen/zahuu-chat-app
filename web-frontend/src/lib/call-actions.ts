@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { ApiError } from "./api-client";
+import { DIRECT_BLOCKED_MESSAGE } from "./conversations";
 import { declineCall, joinCall, leaveCall, startCall, type CallType, type IncomingCallPayload } from "./calls";
 import { useCallStore } from "@/store/call-store";
 
@@ -28,6 +29,10 @@ export async function beginCall(conversationId: string, type: CallType) {
       toast.info("Cuộc trò chuyện này đang có cuộc gọi");
       return;
     }
+    if (errorCodeOf(err) === "DIRECT_BLOCKED") {
+      toast.info(DIRECT_BLOCKED_MESSAGE);
+      return;
+    }
     toast.error("Không bắt đầu được cuộc gọi, vui lòng thử lại");
   }
 }
@@ -46,9 +51,10 @@ export async function joinExistingCall(callId: string, conversationId: string, t
       answered: true,
     });
   } catch (err) {
-    toast.error(
-      errorCodeOf(err) === "CALL_ENDED" ? "Cuộc gọi đã kết thúc" : "Không tham gia được cuộc gọi",
-    );
+    const code = errorCodeOf(err);
+    if (code === "CALL_ENDED") toast.error("Cuộc gọi đã kết thúc");
+    else if (code === "DIRECT_BLOCKED") toast.info(DIRECT_BLOCKED_MESSAGE);
+    else toast.error("Không tham gia được cuộc gọi");
   } finally {
     store.clearIncoming();
   }

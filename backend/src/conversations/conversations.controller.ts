@@ -26,6 +26,7 @@ import { AddMemberDto } from './dto/add-member.dto.js';
 import { CreateDirectConversationDto } from './dto/create-direct-conversation.dto.js';
 import { CreateGroupConversationDto } from './dto/create-group-conversation.dto.js';
 import { ListConversationsDto } from './dto/list-conversations.dto.js';
+import { SearchConversationsDto } from './dto/search-conversations.dto.js';
 import { SetNicknameDto } from './dto/set-nickname.dto.js';
 import { UpdateBackgroundDto } from './dto/update-background.dto.js';
 import { UpdateConversationDto } from './dto/update-conversation.dto.js';
@@ -42,6 +43,12 @@ export class ConversationsController {
       dto.cursor,
       dto.limit,
     );
+  }
+
+  // Khai báo trước ':id' để "search" không bị hiểu là 1 conversation id.
+  @Get('search')
+  search(@CurrentUser() user: AuthUser, @Query() dto: SearchConversationsDto) {
+    return this.conversationsService.searchConversations(user.id, dto.q);
   }
 
   @Post('direct')

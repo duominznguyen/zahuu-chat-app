@@ -184,6 +184,7 @@ export class FriendsService {
         where: { id: requestId },
         data: { status: FriendRequestStatus.REJECTED, respondedAt: new Date() },
       });
+      this.emitRelationshipChanged(request.senderId, request.receiverId);
       return { status: 'rejected' as const };
     }
 
@@ -208,6 +209,7 @@ export class FriendsService {
     }
 
     await this.prisma.friendRequest.delete({ where: { id: requestId } });
+    this.emitRelationshipChanged(request.senderId, request.receiverId);
   }
 
   async listFriends(userId: string, cursor?: string, limit?: number) {
@@ -273,6 +275,7 @@ export class FriendsService {
     if (count === 0) {
       throw new NotFoundException('Hai người hiện không phải là bạn bè');
     }
+    this.emitRelationshipChanged(userId, otherUserId);
   }
 
   async blockUser(blockerId: string, blockedId: string) {
@@ -307,11 +310,15 @@ export class FriendsService {
         },
       }),
     ]);
+    this.emitRelationshipChanged(blockerId, blockedId);
   }
 
   async unblockUser(blockerId: string, blockedId: string) {
     await assertCallerActive(this.prisma, blockerId);
-    await this.prisma.block.deleteMany({ where: { blockerId, blockedId } });
+    const { count } = await this.prisma.block.deleteMany({
+      where: { blockerId, blockedId },
+    });
+    if (count > 0) this.emitRelationshipChanged(blockerId, blockedId);
   }
 
   async listBlocked(blockerId: string) {
@@ -321,6 +328,13 @@ export class FriendsService {
       orderBy: { createdAt: 'desc' },
     });
     return blocks.map((b) => ({ ...b.blocked, blockedAt: b.createdAt }));
+  }
+
+  // Các thay đổi quan hệ không có thông báo riêng (từ chối/huỷ lời mời, huỷ kết
+  // bạn, chặn/bỏ chặn) — client của cả 2 phía chỉ cần biết để tải lại trạng
+  // thái, nên dùng chung 1 event, không phân biệt loại.
+  private emitRelationshipChanged(userA: string, userB: string) {
+    this.events.emit('relationship.changed', { userIds: [userA, userB] });
   }
 
   private async acceptExisting(

@@ -42,6 +42,9 @@ interface FriendAcceptedEvent {
   userId: string;
   otherUserId: string;
 }
+interface RelationshipChangedEvent {
+  userIds: [string, string];
+}
 interface GroupMemberAddedEvent {
   conversationId: string;
   member: { id: string } & Record<string, unknown>;
@@ -254,6 +257,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server
       .to(userRoom(userId))
       .emit('friend:accepted', { userId: otherUserId });
+  }
+
+  // Payload chỉ có id người còn lại, không nói loại thay đổi — người bị chặn
+  // không cần biết mình bị chặn, client chỉ dùng để tải lại trạng thái.
+  @OnEvent('relationship.changed')
+  onRelationshipChanged({ userIds: [userA, userB] }: RelationshipChangedEvent) {
+    this.server
+      .to(userRoom(userA))
+      .emit('relationship:changed', { userId: userB });
+    this.server
+      .to(userRoom(userB))
+      .emit('relationship:changed', { userId: userA });
   }
 
   @OnEvent('group.member.added')

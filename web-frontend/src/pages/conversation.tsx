@@ -9,6 +9,8 @@ import { ChatInput } from "@/components/chat-input";
 import { ConversationInfoSheet } from "@/components/conversation-info-sheet";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
+import { BlockedNotice } from "@/components/blocked-notice";
+import { FriendshipBar } from "@/components/friendship-bar";
 import { InfiniteScrollSentinel } from "@/components/infinite-scroll-sentinel";
 import { MediaViewer } from "@/components/media-viewer";
 import { MessageBubble } from "@/components/message-bubble";
@@ -17,7 +19,7 @@ import { Button } from "@/components/ui/button";
 import { UserAvatar } from "@/components/user-avatar";
 import { ApiError } from "@/lib/api-client";
 import { confirm } from "@/lib/confirm";
-import { getConversationDetail, type ConversationDetail } from "@/lib/conversations";
+import { DIRECT_BLOCKED_MESSAGE, getConversationDetail, type ConversationDetail } from "@/lib/conversations";
 import { downloadFile } from "@/lib/media";
 import {
   deleteMessageForMe,
@@ -38,6 +40,7 @@ import { useCallStore } from "@/store/call-store";
 import { useSocket } from "@/providers/socket-provider";
 import { useAuthStore } from "@/store/auth-store";
 import { useUploadStore } from "@/store/upload-store";
+import { errorCode } from "@/lib/users";
 
 type MessagesCache = InfiniteData<MessagesPage, string | undefined>;
 
@@ -378,7 +381,15 @@ export default function Conversation() {
     onSuccess: () => setReplyTarget(null),
     // Không tự chèn vào cache — message:new sẽ tự đến qua socket (server
     // broadcast cho mọi member trong room, kể cả chính người gửi).
-    onError: () => toast.error("Gửi tin nhắn thất bại, vui lòng thử lại"),
+    onError: (err) => {
+      if (errorCode(err) === "DIRECT_BLOCKED") {
+        // Vừa bị chặn mà UI chưa kịp cập nhật — tải lại để khoá ô nhập.
+        toast.info(DIRECT_BLOCKED_MESSAGE);
+        queryClient.invalidateQueries({ queryKey: ["conversations", "detail", id] });
+        return;
+      }
+      toast.error("Gửi tin nhắn thất bại, vui lòng thử lại");
+    },
   });
 
   // Xóa reply target NGAY lúc đính kèm (không đợi upload xong) — upload chạy
@@ -448,9 +459,10 @@ export default function Conversation() {
   const activeCallId = useCallStore((s) => s.active?.callId);
   const callInfo = detailQuery.data?.activeCall;
   // Đang ở trong chính cuộc gọi này thì không cần banner "Tham gia" nữa.
-  const ongoingCall =
-    callInfo?.status === "ONGOING" && callInfo.id !== activeCallId ? callInfo : null;
   const otherMember = isDirect ? detailQuery.data?.members.find((m) => m.id !== myId) : undefined;
+  const canMessage = detailQuery.data?.canMessage ?? true;
+  const ongoingCall =
+    canMessage && callInfo?.status === "ONGOING" && callInfo.id !== activeCallId ? callInfo : null;
   const title = detailQuery.data?.name ?? "...";
   const headerSubtitle = isDirect && otherMember?.isOnline ? "Đang hoạt động" : undefined;
 
@@ -472,10 +484,10 @@ export default function Conversation() {
   return (
     <div
       className="relative flex h-full flex-col bg-background"
-      onDragEnter={handleDragEnter}
+      onDragEnter={canMessage ? handleDragEnter : undefined}
       onDragOver={(e) => e.preventDefault()}
-      onDragLeave={handleDragLeave}
-      onDrop={handleDrop}
+      onDragLeave={canMessage ? handleDragLeave : undefined}
+      onDrop={canMessage ? handleDrop : undefined}
     >
       {dragOver && (
         <div className="pointer-events-none absolute inset-0 z-20 flex items-center justify-center border-4 border-dashed border-primary bg-primary/10">
@@ -500,18 +512,24 @@ export default function Conversation() {
         </HeaderIdentity>
         {detailQuery.data && (
           <div className="flex items-center gap-1">
-            <Button variant="ghost" size="icon" aria-label="Gọi thoại" onClick={() => void beginCall(id, "AUDIO")}>
-              <Phone className="size-5" />
-            </Button>
-            <Button variant="ghost" size="icon" aria-label="Gọi video" onClick={() => void beginCall(id, "VIDEO")}>
-              <Video className="size-5" />
-            </Button>
+            {canMessage && (
+              <>
+                <Button variant="ghost" size="icon" aria-label="Gọi thoại" onClick={() => void beginCall(id, "AUDIO")}>
+                  <Phone className="size-5" />
+                </Button>
+                <Button variant="ghost" size="icon" aria-label="Gọi video" onClick={() => void beginCall(id, "VIDEO")}>
+                  <Video className="size-5" />
+                </Button>
+              </>
+            )}
             <Button variant="ghost" size="icon" aria-label="Thông tin hội thoại" onClick={() => setInfoOpen(true)}>
               <Info className="size-5" />
             </Button>
           </div>
         )}
       </div>
+
+      {otherMember && canMessage && <FriendshipBar userId={otherMember.id} name={title} />}
 
       {ongoingCall && (
         <div className="flex items-center justify-between gap-3 border-b border-border bg-success/10 px-4 py-2 text-sm">
@@ -608,6 +626,7 @@ export default function Conversation() {
                     onOpenMedia={() => setViewerMessageId(item.id)}
                     onDownloadFile={() => downloadFile(item.mediaUrl!, item.mediaName ?? undefined)}
                     onJumpToMessage={handleJumpToMessage}
+                    canCallBack={canMessage}
                   />
                 </Fragment>
               );
@@ -648,13 +667,17 @@ export default function Conversation() {
         </div>
       )}
 
-      <ChatInput
-        onSend={(text) => sendMutation.mutate(text)}
-        onAttach={handleAttach}
-        onTypingChange={(isTyping) => {
-          socket?.emit(isTyping ? "message:typing" : "message:stopTyping", { conversationId: id });
-        }}
-      />
+      {!canMessage && otherMember ? (
+        <BlockedNotice userId={otherMember.id} />
+      ) : (
+        <ChatInput
+          onSend={(text) => sendMutation.mutate(text)}
+          onAttach={handleAttach}
+          onTypingChange={(isTyping) => {
+            socket?.emit(isTyping ? "message:typing" : "message:stopTyping", { conversationId: id });
+          }}
+        />
+      )}
 
       {viewerMessageId && (
         <MediaViewer

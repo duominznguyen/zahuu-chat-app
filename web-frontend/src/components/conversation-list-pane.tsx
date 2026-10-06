@@ -1,14 +1,16 @@
 import type { InfiniteData } from "@tanstack/react-query";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
-import { Plus } from "lucide-react";
-import { useEffect } from "react";
+import { Plus, Search } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
 import { useLocation, useNavigate } from "react-router-dom";
+import { ConversationSearchResults } from "@/components/conversation-search-results";
 import { EmptyState } from "@/components/empty-state";
 import { ErrorState } from "@/components/error-state";
 import { InfiniteScrollSentinel } from "@/components/infinite-scroll-sentinel";
 import { ListRow } from "@/components/list-row";
 import { UserAvatar } from "@/components/user-avatar";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { formatRelativeTime } from "@/lib/format-time";
 import {
   listConversations,
@@ -36,7 +38,7 @@ function patchOnlineStatus(
     })),
   };
 }
-
+  
 const MEDIA_LABEL: Record<string, string> = {
   IMAGE: "ảnh",
   VIDEO: "video",
@@ -104,21 +106,58 @@ export function ConversationListPane() {
 
   const items = query.data?.pages.flatMap((p) => p.items) ?? [];
 
+  // Chế độ tìm kiếm chỉ thoát qua nút Đóng/Escape/chọn kết quả, không thoát
+  // khi blur — blur xảy ra trước click nên sẽ gỡ kết quả trước khi kịp bấm.
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const searchInputRef = useRef<HTMLInputElement>(null);
+  const closeSearch = () => {
+    setSearchOpen(false);
+    setSearchText("");
+    searchInputRef.current?.blur();
+  };
+
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center justify-between border-b border-border p-4">
-        <h2 className="text-lg font-semibold text-foreground">Tin nhắn</h2>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          aria-label="Tạo nhóm"
-          onClick={() => navigate("/create-group", { state: { background: location } })}
-        >
-          <Plus />
-        </Button>
+      <div className="border-b border-border p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-lg font-semibold text-foreground">Tin nhắn</h2>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Tạo nhóm"
+            onClick={() => navigate("/create-group", { state: { background: location } })}
+          >
+            <Plus />
+          </Button>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="relative flex-1">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground" />
+            <Input
+              ref={searchInputRef}
+              placeholder="Tìm bạn bè, nhóm hoặc @username"
+              aria-label="Tìm kiếm đoạn chat"
+              value={searchText}
+              onChange={(e) => setSearchText(e.target.value)}
+              onFocus={() => setSearchOpen(true)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") closeSearch();
+              }}
+              className="pl-8"
+            />
+          </div>
+          {searchOpen && (
+            <Button variant="ghost" size="sm" onClick={closeSearch}>
+              Đóng
+            </Button>
+          )}
+        </div>
       </div>
       <div className="flex-1 overflow-y-auto">
-        {query.isLoading ? null : query.isError ? (
+        {searchOpen ? (
+          <ConversationSearchResults searchText={searchText} onPicked={closeSearch} />
+        ) : query.isLoading ? null : query.isError ? (
           <ErrorState onRetry={() => query.refetch()} />
         ) : items.length === 0 ? (
           <EmptyState title="Chưa có cuộc trò chuyện nào" />
