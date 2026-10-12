@@ -37,12 +37,22 @@ export interface Message {
 export interface MessagesPage {
   items: Message[];
   nextCursor: string | null;
+  // Chỉ có ở trang lấy theo `after`/`around`: true khi vẫn còn tin mới hơn
+  // trang này (chưa chạm tin mới nhất của đoạn chat).
+  hasNewer?: boolean;
 }
 
 export function listMessages(conversationId: string, cursor?: string) {
   const qs = cursor ? `?cursor=${cursor}` : "";
   return apiClient.get<MessagesPage>(
     `/conversations/${conversationId}/messages${qs}`,
+  );
+}
+
+// Trang tin MỚI HƠN 1 tin — tải tiếp về phía tin mới sau khi nhảy tới tin cũ.
+export function listMessagesAfter(conversationId: string, afterId: string) {
+  return apiClient.get<MessagesPage & { hasNewer: boolean }>(
+    `/conversations/${conversationId}/messages?after=${afterId}`,
   );
 }
 

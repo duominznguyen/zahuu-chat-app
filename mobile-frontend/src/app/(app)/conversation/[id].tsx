@@ -50,6 +50,7 @@ import {
   deleteMessageForMe,
   getMessagesAround,
   listMessages,
+  listMessagesAfter,
   markRead,
   recallMessage,
   removeReaction,
@@ -97,7 +98,10 @@ const styles = StyleSheet.create({
   },
 });
 
-type MessagesCache = InfiniteData<MessagesPage, string | undefined>;
+// `cursor` = trang tin cũ hơn, `after` = trang tin mới hơn, `around` = cửa sổ
+// quanh 1 tin (nhảy tới tin).
+type MessagesPageParam = { cursor?: string; after?: string; around?: string };
+type MessagesCache = InfiniteData<MessagesPage, MessagesPageParam>;
 
 function patchMessage(
   data: MessagesCache | undefined,
@@ -187,7 +191,7 @@ function prependMessage(
   if (!data || data.pages.length === 0) {
     return {
       pages: [{ items: [message], nextCursor: null }],
-      pageParams: [undefined],
+      pageParams: [{}],
     };
   }
   // Chặn trùng id — có thể nhận cùng 1 message:new nhiều lần nếu màn này lỡ
@@ -245,12 +249,23 @@ export default function Conversation() {
     }
   }, [detailQuery.error, router, toast]);
 
+  // Phân trang 2 chiều: trang sau (`fetchNextPage`, cuộn lên) là tin CŨ hơn,
+  // trang trước (`fetchPreviousPage`, cuộn xuống) là tin MỚI hơn — chỉ có khi
+  // đang ở cửa sổ tin cũ sau khi nhảy tới 1 tin.
   const messagesQuery = useInfiniteQuery({
     queryKey: ["messages", id],
-    queryFn: ({ pageParam }: { pageParam?: string }) =>
-      listMessages(id, pageParam),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    queryFn: ({ pageParam }: { pageParam: MessagesPageParam }) => {
+      if (pageParam.around) return getMessagesAround(id, pageParam.around);
+      if (pageParam.after) return listMessagesAfter(id, pageParam.after);
+      return listMessages(id, pageParam.cursor);
+    },
+    initialPageParam: {} as MessagesPageParam,
+    getNextPageParam: (lastPage): MessagesPageParam | undefined =>
+      lastPage.nextCursor ? { cursor: lastPage.nextCursor } : undefined,
+    getPreviousPageParam: (firstPage): MessagesPageParam | undefined =>
+      firstPage.hasNewer && firstPage.items[0]
+        ? { after: firstPage.items[0].id }
+        : undefined,
     // Lúc không mở màn này, socket vẫn có thể bỏ lỡ tin mới — cache cũ khiến
     // "đánh dấu đã đọc" gửi id tin cũ. Luôn lấy mới khi mở lại.
     staleTime: 0,
@@ -274,16 +289,27 @@ export default function Conversation() {
       });
   };
 
-  // Cửa sổ "tin cũ" sau khi nhảy tới 1 tin ngoài phần đã tải: cache chỉ còn
-  // ~60 tin quanh tin đó, CHƯA có các tin mới hơn. Gắn theo id hội thoại để
-  // sang đoạn chat khác không mang theo trạng thái này.
-  const [newerWindowFor, setNewerWindowFor] = useState<string | null>(null);
-  const hasNewerWindow = newerWindowFor === id;
+  // Cửa sổ "tin cũ" sau khi nhảy tới 1 tin ngoài phần đã tải: cache chưa có
+  // tới tin mới nhất. Suy thẳng từ trang đầu (mới nhất) đang có — cuộn xuống
+  // tải hết phần tin mới hơn thì tự hết, không cần state riêng.
+  const hasNewerWindow = !!messagesQuery.data?.pages[0]?.hasNewer;
   // Handler socket đăng ký 1 lần nên phải đọc giá trị mới nhất qua ref.
   const newerWindowRef = useRef(false);
   useEffect(() => {
     newerWindowRef.current = hasNewerWindow;
   }, [hasNewerWindow]);
+
+  // Rời màn khi đang ở cửa sổ tin cũ: bỏ cache để lần mở sau bắt đầu từ tin
+  // mới nhất — cửa sổ được lưu làm tham số trang (để refetch lúc ĐANG xem giữ
+  // đúng chỗ) nên nếu giữ cache, mở lại sẽ tải lại đúng cửa sổ tin cũ đó.
+  useEffect(
+    () => () => {
+      if (newerWindowRef.current) {
+        queryClient.removeQueries({ queryKey: ["messages", id], exact: true });
+      }
+    },
+    [id, queryClient],
+  );
 
   const listRef = useRef<FlatList<Message>>(null);
 
@@ -292,7 +318,6 @@ export default function Conversation() {
   const returnToLatest = async () => {
     if (!newerWindowRef.current) return;
     newerWindowRef.current = false;
-    setNewerWindowFor(null);
     await queryClient.resetQueries({ queryKey: ["messages", id] });
     // FlatList giữ nguyên vị trí cuộn cũ (đang ở sâu trong lịch sử) dù data
     // đã thay — phải tự về cuối (offset 0 vì danh sách inverted).
@@ -312,6 +337,7 @@ export default function Conversation() {
   }, [messages[0]?.id, hasNewerWindow]);
 
   const scrollRetries = useRef(0);
+  const suppressStartReached = useRef(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
 
   // FlatList chưa kịp nhận data mới (vừa thay cache) thì scrollToIndex ném lỗi
@@ -336,22 +362,33 @@ export default function Conversation() {
   const jumpToMessage = async (messageId: string) => {
     let index = messages.findIndex((m) => m.id === messageId);
     if (index < 0) {
+      // Cửa sổ mới nạp xong thì danh sách còn đứng ở đáy (offset 0) — đúng
+      // vùng kích hoạt onStartReached, sẽ tự tải dồn hết tin mới hơn trước khi
+      // kịp cuộn tới tin đích. Khoá lại tới khi cuộn xong.
+      suppressStartReached.current = true;
       try {
         const around = await getMessagesAround(id, messageId);
+        // Lưu `around` làm tham số trang: refetch (vd khi kết nối lại) tải lại
+        // đúng cửa sổ đang xem, không nhảy về tin mới nhất.
         queryClient.setQueryData<MessagesCache>(["messages", id], {
-          pages: [{ items: around.items, nextCursor: around.nextCursor }],
-          pageParams: [undefined],
+          pages: [around],
+          pageParams: [{ around: messageId }],
         });
+        // Cập nhật ngay cho handler socket, không đợi render.
         newerWindowRef.current = around.hasNewer;
-        setNewerWindowFor(around.hasNewer ? id : null);
         index = around.items.findIndex((m) => m.id === messageId);
       } catch {
+        suppressStartReached.current = false;
         toast.show("Không tìm thấy tin nhắn trong đoạn chat");
         return;
       }
     }
     scrollRetries.current = 0;
     setTimeout(() => scrollToIndexSafely(index), 100);
+    // Đủ cho cả các lần thử lại của scrollToIndex (onScrollToIndexFailed).
+    setTimeout(() => {
+      suppressStartReached.current = false;
+    }, 1500);
     setHighlightedId(messageId);
     setTimeout(() => {
       setHighlightedId((current) => (current === messageId ? null : current));
@@ -917,6 +954,27 @@ export default function Conversation() {
                 messagesQuery.fetchNextPage();
               }
             }}
+            // List inverted nên "start" là phía dưới (tin mới) — chỉ có trang
+            // trước khi đang ở cửa sổ tin cũ sau khi nhảy tới 1 tin.
+            onStartReached={() => {
+              if (
+                !suppressStartReached.current &&
+                messagesQuery.hasPreviousPage &&
+                !messagesQuery.isFetchingPreviousPage
+              ) {
+                messagesQuery.fetchPreviousPage();
+              }
+            }}
+            // Nửa màn hình (mặc định 2) — tin đích nằm giữa cửa sổ ~60 tin, với
+            // ngưỡng lớn nó vẫn lọt vùng kích hoạt và tự tải tin mới hơn dù
+            // người dùng chưa kéo xuống.
+            onStartReachedThreshold={0.5}
+            // Chèn trang tin mới hơn vào đầu danh sách (phía dưới) sẽ đẩy nội
+            // dung đang xem đi — giữ tin đang hiện đứng yên. Chỉ bật ở cửa sổ
+            // tin cũ: ở chế độ thường, tin mới tới phải hiện ra ngay ở cuối.
+            maintainVisibleContentPosition={
+              hasNewerWindow ? { minIndexForVisible: 0 } : undefined
+            }
             // Tin đích chưa được đo (nằm ngoài vùng đã render) — cuộn ước
             // lượng tới gần để nó được render, rồi thử lại.
             onScrollToIndexFailed={(info) => {
