@@ -11,7 +11,7 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   FlatList,
   KeyboardAvoidingView,
@@ -48,6 +48,7 @@ import {
 } from "@/lib/conversations";
 import {
   deleteMessageForMe,
+  getMessagesAround,
   listMessages,
   markRead,
   recallMessage,
@@ -66,6 +67,7 @@ import { downloadAndShare, uploadMedia } from "@/lib/media";
 import { replyPreviewLabel } from "@/lib/reply-preview";
 import { systemMessageText } from "@/lib/system-message";
 import { useCallStore } from "@/store/call-store";
+import { useJumpStore } from "@/store/jump-store";
 import { useSocket } from "@/providers/socket-provider";
 import { useAuthStore } from "@/store/auth-store";
 
@@ -86,6 +88,14 @@ const REACTION_EMOJI: Record<ReactionType, string> = {
   angry: "😠",
 };
 const TYPING_EXPIRE_MS = 5000;
+
+const styles = StyleSheet.create({
+  // Tô sáng ngắn tin vừa nhảy tới (màu primary nhạt, đọc được ở cả 2 theme).
+  highlighted: {
+    backgroundColor: "rgba(13, 148, 136, 0.18)",
+    borderRadius: 12,
+  },
+});
 
 type MessagesCache = InfiniteData<MessagesPage, string | undefined>;
 
@@ -264,10 +274,106 @@ export default function Conversation() {
       });
   };
 
+  // Cửa sổ "tin cũ" sau khi nhảy tới 1 tin ngoài phần đã tải: cache chỉ còn
+  // ~60 tin quanh tin đó, CHƯA có các tin mới hơn. Gắn theo id hội thoại để
+  // sang đoạn chat khác không mang theo trạng thái này.
+  const [newerWindowFor, setNewerWindowFor] = useState<string | null>(null);
+  const hasNewerWindow = newerWindowFor === id;
+  // Handler socket đăng ký 1 lần nên phải đọc giá trị mới nhất qua ref.
+  const newerWindowRef = useRef(false);
   useEffect(() => {
-    if (messages.length > 0) markReadIfNeeded(messages[0].id);
+    newerWindowRef.current = hasNewerWindow;
+  }, [hasNewerWindow]);
+
+  const listRef = useRef<FlatList<Message>>(null);
+
+  // Gửi tin/đính kèm khi đang xem tin cũ: về tin mới nhất trước, nếu không
+  // tin vừa gửi (tới qua socket) bị bỏ qua và người dùng không thấy đâu.
+  const returnToLatest = async () => {
+    if (!newerWindowRef.current) return;
+    newerWindowRef.current = false;
+    setNewerWindowFor(null);
+    await queryClient.resetQueries({ queryKey: ["messages", id] });
+    // FlatList giữ nguyên vị trí cuộn cũ (đang ở sâu trong lịch sử) dù data
+    // đã thay — phải tự về cuối (offset 0 vì danh sách inverted).
+    setTimeout(
+      () => listRef.current?.scrollToOffset({ offset: 0, animated: false }),
+      50,
+    );
+  };
+
+  // Ở cửa sổ tin cũ, messages[0] là tin mới nhất của CỬA SỔ chứ không phải
+  // của đoạn chat — đánh dấu theo nó sẽ lùi con trỏ đã đọc.
+  useEffect(() => {
+    if (messages.length > 0 && !hasNewerWindow) {
+      markReadIfNeeded(messages[0].id);
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages[0]?.id]);
+  }, [messages[0]?.id, hasNewerWindow]);
+
+  const scrollRetries = useRef(0);
+  const [highlightedId, setHighlightedId] = useState<string | null>(null);
+
+  // FlatList chưa kịp nhận data mới (vừa thay cache) thì scrollToIndex ném lỗi
+  // "out of range" — thử lại vài nhịp thay vì để crash.
+  const scrollToIndexSafely = (index: number, attempt = 0) => {
+    try {
+      listRef.current?.scrollToIndex({
+        index,
+        animated: true,
+        viewPosition: 0.5,
+      });
+    } catch {
+      if (attempt < 5) {
+        setTimeout(() => scrollToIndexSafely(index, attempt + 1), 100);
+      }
+    }
+  };
+
+  // Cuộn tới 1 tin + tô sáng ngắn. Tin chưa tải (kết quả tìm kiếm, tin gốc
+  // của trích dẫn ở trang cũ) thì lấy cả cửa sổ quanh nó trong 1 request và
+  // thay cache bằng cửa sổ đó.
+  const jumpToMessage = async (messageId: string) => {
+    let index = messages.findIndex((m) => m.id === messageId);
+    if (index < 0) {
+      try {
+        const around = await getMessagesAround(id, messageId);
+        queryClient.setQueryData<MessagesCache>(["messages", id], {
+          pages: [{ items: around.items, nextCursor: around.nextCursor }],
+          pageParams: [undefined],
+        });
+        newerWindowRef.current = around.hasNewer;
+        setNewerWindowFor(around.hasNewer ? id : null);
+        index = around.items.findIndex((m) => m.id === messageId);
+      } catch {
+        toast.show("Không tìm thấy tin nhắn trong đoạn chat");
+        return;
+      }
+    }
+    scrollRetries.current = 0;
+    setTimeout(() => scrollToIndexSafely(index), 100);
+    setHighlightedId(messageId);
+    setTimeout(() => {
+      setHighlightedId((current) => (current === messageId ? null : current));
+    }, 1800);
+  };
+
+  // Màn tìm kiếm (chồng lên trên) gửi yêu cầu qua store rồi dismissTo về đây.
+  // Nghe qua subscribe (callback) — màn này luôn mounted sẵn phía dưới stack
+  // lúc yêu cầu được gửi; đọc hàm mới nhất qua ref vì nó đóng kín `messages`.
+  const jumpToMessageRef = useRef(jumpToMessage);
+  useEffect(() => {
+    jumpToMessageRef.current = jumpToMessage;
+  });
+  useEffect(
+    () =>
+      useJumpStore.subscribe(({ pending }) => {
+        if (!pending || pending.conversationId !== id) return;
+        useJumpStore.getState().clear();
+        void jumpToMessageRef.current(pending.messageId);
+      }),
+    [id],
+  );
 
   useEffect(() => {
     if (!socket) return;
@@ -283,10 +389,14 @@ export default function Conversation() {
 
     const onNew = (message: Message) => {
       if (message.conversationId !== id) return;
+      // Detail luôn làm mới (seenBy đổi theo tin neo) kể cả khi đang ở cửa sổ tin cũ.
+      refreshDetail();
+      // Đang ở cửa sổ tin cũ: chèn vào đầu cache sẽ đặt tin sai chỗ (sau một
+      // khoảng trống chưa tải) — bỏ qua, bấm "Đến tin mới nhất" để tải lại đủ.
+      if (newerWindowRef.current) return;
       queryClient.setQueryData<MessagesCache>(["messages", id], (old) =>
         prependMessage(old, message),
       );
-      refreshDetail();
       if (message.sender.id !== myId) markReadIfNeeded(message.id);
     };
     const onRecalled = ({
@@ -341,7 +451,9 @@ export default function Conversation() {
           setTypingUserIds((ids) => ids.filter((i) => i !== userId));
         }, TYPING_EXPIRE_MS),
       );
-      setTypingUserIds((ids) => (ids.includes(userId) ? ids : [...ids, userId]));
+      setTypingUserIds((ids) =>
+        ids.includes(userId) ? ids : [...ids, userId],
+      );
     };
     const onStopTyping = ({
       conversationId,
@@ -438,8 +550,10 @@ export default function Conversation() {
   }, [socket, id, queryClient, myId]);
 
   const sendMutation = useMutation({
-    mutationFn: (content: string) =>
-      sendTextMessage(id, content, replyTarget?.id),
+    mutationFn: async (content: string) => {
+      await returnToLatest();
+      return sendTextMessage(id, content, replyTarget?.id);
+    },
     onSuccess: () => setReplyTarget(null),
     // Không tự chèn vào cache ở đây — message:new sẽ tự đến qua socket (server
     // broadcast cho mọi member trong room, kể cả chính người gửi).
@@ -512,6 +626,7 @@ export default function Conversation() {
     mimeType: string;
     messageType: "IMAGE" | "VIDEO" | "FILE";
   }) => {
+    void returnToLatest();
     setUploadState({ label: file.name, progress: 0 });
     try {
       const uploaded = await uploadMedia(file, "MESSAGE", (progress) =>
@@ -627,15 +742,17 @@ export default function Conversation() {
   // cuộc gọi đang đổ chuông đã có overlay/banner nhận cuộc gọi riêng.
   const callInfo = detailQuery.data?.activeCall;
   const ongoingCall =
-    canCall &&
-    callInfo?.status === "ONGOING" &&
-    callInfo.id !== activeCallId
+    canCall && callInfo?.status === "ONGOING" && callInfo.id !== activeCallId
       ? callInfo
       : null;
 
   // Hàng avatar "đã xem" hiện dưới tin neo (tin mới nhất mình còn thấy, kể cả
   // tin của người khác) — cho cả DIRECT lẫn GROUP.
   const seenBy = detailQuery.data?.seenBy;
+  const listExtraData = useMemo(
+    () => ({ detail: detailQuery.data, highlightedId }),
+    [detailQuery.data, highlightedId],
+  );
 
   const typingNames = typingUserIds.map(
     (uid) =>
@@ -783,16 +900,33 @@ export default function Conversation() {
           />
         ) : (
           <FlatList
+            ref={listRef}
             className="flex-1"
             data={messages}
             // Dòng tin còn phụ thuộc chi tiết hội thoại (seenBy, tên thành
-            // viên cho tin SYSTEM, canMessage) — đổi thì phải vẽ lại dù
-            // danh sách tin nhắn không đổi.
-            extraData={detailQuery.data}
+            // viên cho tin SYSTEM, canMessage) và tin đang tô sáng — đổi thì
+            // phải vẽ lại dù danh sách tin nhắn không đổi.
+            extraData={listExtraData}
             inverted
             keyExtractor={(item) => item.id}
             onEndReached={() => {
-              if (messagesQuery.hasNextPage) messagesQuery.fetchNextPage();
+              if (
+                messagesQuery.hasNextPage &&
+                !messagesQuery.isFetchingNextPage
+              ) {
+                messagesQuery.fetchNextPage();
+              }
+            }}
+            // Tin đích chưa được đo (nằm ngoài vùng đã render) — cuộn ước
+            // lượng tới gần để nó được render, rồi thử lại.
+            onScrollToIndexFailed={(info) => {
+              listRef.current?.scrollToOffset({
+                offset: info.averageItemLength * info.index,
+                animated: false,
+              });
+              if (scrollRetries.current++ < 5) {
+                setTimeout(() => scrollToIndexSafely(info.index), 150);
+              }
             }}
             contentContainerClassName="px-3 py-2"
             renderItem={({ item, index }) => {
@@ -821,7 +955,13 @@ export default function Conversation() {
               const isInteractive =
                 item.type !== "SYSTEM" && item.type !== "CALL";
               return (
-                <View>
+                <View
+                  // style thay vì đổi className: chỉ tô nền tạm thời, không
+                  // cần NativeWind tính lại class.
+                  style={
+                    highlightedId === item.id ? styles.highlighted : undefined
+                  }
+                >
                   <MessageBubble
                     isOwn={isOwn}
                     senderName={item.sender.displayName}
@@ -846,6 +986,11 @@ export default function Conversation() {
                         : undefined
                     }
                     onLinkPress={handleLinkPress}
+                    onReplyPress={
+                      item.replyTo
+                        ? () => void jumpToMessage(item.replyTo!.id)
+                        : undefined
+                    }
                     onPress={
                       item.mediaUrl
                         ? item.type === "IMAGE" || item.type === "VIDEO"
@@ -882,6 +1027,23 @@ export default function Conversation() {
               );
             }}
           />
+        )}
+        {hasNewerWindow && (
+          <View className="absolute bottom-3 left-0 right-0 items-center">
+            <Pressable
+              onPress={() => void returnToLatest()}
+              className="flex-row items-center gap-1.5 rounded-full bg-zinc-900 px-4 py-2 active:opacity-80 dark:bg-zinc-100"
+            >
+              <Ionicons
+                name="arrow-down"
+                size={16}
+                color={colorScheme === "dark" ? "#18181b" : "#fff"}
+              />
+              <Text className="text-sm font-medium text-white dark:text-zinc-900">
+                Đến tin mới nhất
+              </Text>
+            </Pressable>
+          </View>
         )}
       </View>
 

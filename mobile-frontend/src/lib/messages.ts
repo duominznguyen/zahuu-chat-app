@@ -3,13 +3,7 @@ import type { CallSummary } from "./calls";
 import type { PublicUser } from "./friends";
 
 export type MessageType =
-  | "TEXT"
-  | "IMAGE"
-  | "VIDEO"
-  | "FILE"
-  | "STICKER"
-  | "SYSTEM"
-  | "CALL";
+  "TEXT" | "IMAGE" | "VIDEO" | "FILE" | "STICKER" | "SYSTEM" | "CALL";
 export type ReactionType = "like" | "love" | "haha" | "wow" | "sad" | "angry";
 
 export interface ReplyToPreview {
@@ -107,4 +101,55 @@ export function markRead(conversationId: string, lastReadMessageId: string) {
   return apiClient.patch(`/conversations/${conversationId}/read`, {
     lastReadMessageId,
   });
+}
+
+export interface SearchHit {
+  id: string;
+  content: string | null;
+  createdAt: string;
+  sender: PublicUser;
+}
+
+export interface SearchPage {
+  items: SearchHit[];
+  nextCursor: string | null;
+}
+
+// Chỉ tin TEXT chưa thu hồi, chưa xoá-cho-mình (lọc ở backend).
+export function searchMessages(
+  conversationId: string,
+  q: string,
+  cursor?: string,
+) {
+  const params = new URLSearchParams({ q });
+  if (cursor) params.set("cursor", cursor);
+  return apiClient.get<SearchPage>(
+    `/conversations/${conversationId}/messages/search?${params}`,
+  );
+}
+
+// MEDIA = ảnh + video, FILE = file đính kèm.
+export function listMediaMessages(
+  conversationId: string,
+  kind: "MEDIA" | "FILE",
+  cursor?: string,
+) {
+  const params = new URLSearchParams({ kind });
+  if (cursor) params.set("cursor", cursor);
+  return apiClient.get<MessagesPage>(
+    `/conversations/${conversationId}/media?${params}`,
+  );
+}
+
+export interface AroundPage extends MessagesPage {
+  // true khi còn tin mới hơn cửa sổ này (cửa sổ không chạm tới tin mới nhất).
+  hasNewer: boolean;
+}
+
+// Cửa sổ ~30 tin cũ + ~30 tin mới quanh 1 tin, 1 request — thời gian không phụ
+// thuộc tin đó cách tin mới nhất bao xa.
+export function getMessagesAround(conversationId: string, messageId: string) {
+  return apiClient.get<AroundPage>(
+    `/conversations/${conversationId}/messages/around?messageId=${messageId}`,
+  );
 }

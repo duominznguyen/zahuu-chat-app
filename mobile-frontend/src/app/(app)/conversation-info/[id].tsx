@@ -233,6 +233,34 @@ export default function ConversationInfo() {
         </View>
 
         <View className="border-t border-zinc-100 dark:border-zinc-800">
+          {!isGroup && otherMember && (
+            <ListRow
+              leading={
+                <Ionicons
+                  name="person-circle-outline"
+                  size={22}
+                  color="#71717a"
+                />
+              }
+              title="Xem trang cá nhân"
+              onPress={() => router.push(`/user/${otherMember.id}`)}
+            />
+          )}
+
+          <ListRow
+            leading={<Ionicons name="search" size={22} color="#71717a" />}
+            title="Tìm kiếm tin nhắn"
+            onPress={() => router.push(`/conversation-search/${id}`)}
+          />
+
+          <ListRow
+            leading={
+              <Ionicons name="images-outline" size={22} color="#71717a" />
+            }
+            title="File phương tiện và file"
+            onPress={() => router.push(`/conversation-media/${id}`)}
+          />
+
           {isGroup && isAdmin && (
             <ListRow
               leading={

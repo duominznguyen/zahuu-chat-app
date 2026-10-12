@@ -3,11 +3,7 @@ import { Image, type ImageLoadEventData } from "expo-image";
 import { useState } from "react";
 import { Linking, Pressable, Text, View } from "react-native";
 
-import {
-  callSubtitle,
-  callTitle,
-  type CallSummary,
-} from "@/lib/calls";
+import { callSubtitle, callTitle, type CallSummary } from "@/lib/calls";
 import { videoPosterUrl } from "@/lib/media";
 import type { MessageType, ReplyToPreview } from "@/lib/messages";
 import { replyPreviewLabel } from "@/lib/reply-preview";
@@ -51,6 +47,8 @@ interface MessageBubbleProps {
   systemText?: string;
   // Không truyền thì ẩn nút "Gọi lại" (vd thiết bị không hỗ trợ gọi điện).
   onCallBack?: () => void;
+  // Bấm vào ô trích dẫn trả lời — vd cuộn tới tin gốc.
+  onReplyPress?: () => void;
 }
 
 const AVATAR_SIZE = 28;
@@ -171,9 +169,15 @@ function MediaPreview({ url, isVideo }: { url: string; isVideo: boolean }) {
 function ReplyQuote({
   replyTo,
   textClassName,
+  onPress,
+  onLongPress,
 }: {
   replyTo: NonNullable<MessageBubbleData["replyTo"]>;
   textClassName: string;
+  onPress?: () => void;
+  // Pressable lồng trong bong bóng tự chiếm cử chỉ chạm — phải forward
+  // long-press, không thì giữ tay vào ô trích dẫn không mở được menu tin.
+  onLongPress?: () => void;
 }) {
   const thumbUrl =
     !replyTo.isRecalled && replyTo.mediaUrl
@@ -184,7 +188,13 @@ function ReplyQuote({
           : null
       : null;
   return (
-    <View className="flex-row items-center gap-1.5">
+    <Pressable
+      accessibilityLabel="Xem tin nhắn gốc"
+      disabled={!onPress}
+      onPress={onPress}
+      onLongPress={onLongPress}
+      className="flex-row items-center gap-1.5"
+    >
       {thumbUrl && (
         <Image
           source={{ uri: thumbUrl }}
@@ -195,7 +205,7 @@ function ReplyQuote({
       <Text numberOfLines={1} className={`shrink text-xs ${textClassName}`}>
         {replyPreviewLabel(replyTo)}
       </Text>
-    </View>
+    </Pressable>
   );
 }
 
@@ -267,6 +277,7 @@ export function MessageBubble({
   onLinkPress,
   systemText,
   onCallBack,
+  onReplyPress,
 }: MessageBubbleProps) {
   // Tin SYSTEM không thuộc chuỗi tin của ai: không avatar, không menu.
   if (message.type === "SYSTEM") {
@@ -375,6 +386,8 @@ export function MessageBubble({
                     <ReplyQuote
                       replyTo={message.replyTo}
                       textClassName="text-zinc-500 dark:text-zinc-400"
+                      onPress={onReplyPress}
+                      onLongPress={onLongPress}
                     />
                   </View>
                 )}
@@ -392,8 +405,12 @@ export function MessageBubble({
                 >
                   <ReplyQuote
                     replyTo={message.replyTo}
+                    onPress={onReplyPress}
+                    onLongPress={onLongPress}
                     textClassName={
-                      isOwn ? "text-white/80" : "text-zinc-500 dark:text-zinc-400"
+                      isOwn
+                        ? "text-white/80"
+                        : "text-zinc-500 dark:text-zinc-400"
                     }
                   />
                 </View>

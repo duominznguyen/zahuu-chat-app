@@ -119,8 +119,11 @@ export default function UserProfile() {
 
   const messageMutation = useMutation({
     mutationFn: () => createDirectConversation(id),
+    // dismissTo thay vì push: mở hồ sơ từ chính đoạn chat đó (Thông tin → Xem
+    // trang cá nhân) thì quay về đúng màn chat cũ, không chồng thêm 1 bản thứ 2
+    // của cùng đoạn chat (2 bản cùng mount gây trùng listener socket).
     onSuccess: (conv) => {
-      router.push(`/conversation/${conv.id}`);
+      router.dismissTo(`/conversation/${conv.id}`);
     },
   });
 
