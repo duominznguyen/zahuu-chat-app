@@ -1,5 +1,6 @@
 import { useMutation } from "@tanstack/react-query";
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { ErrorState } from "@/components/error-state";
 import { FormField } from "@/components/form-field";
@@ -29,11 +30,20 @@ function DeactivateIntro() {
   );
 }
 
+// Tự về /login không kèm ?redirect, nếu không tài khoản đăng nhập kế tiếp sẽ
+// bị đưa thẳng vào trang vô hiệu hoá của tài khoản vừa rời đi.
+function useGoToLogin() {
+  const navigate = useNavigate();
+  return () => navigate("/login", { replace: true });
+}
+
 function PasswordConfirm() {
   const [password, setPassword] = useState("");
+  const goToLogin = useGoToLogin();
 
   const mutation = useMutation({
     mutationFn: (pw: string) => deactivateAccount(pw),
+    onSuccess: goToLogin,
     onError: (err) =>
       toast.error(
         errorCode(err) === "INVALID_PASSWORD"
@@ -69,8 +79,10 @@ function PasswordConfirm() {
 // Tài khoản Google không có mật khẩu để xác nhận — bù bằng hộp thoại xác nhận
 // vì đây là hành động phá hủy mà không có bước nhập lại gì khác.
 function GoogleOnlyConfirm() {
+  const goToLogin = useGoToLogin();
   const mutation = useMutation({
     mutationFn: () => deactivateAccount(),
+    onSuccess: goToLogin,
     onError: () => toast.error("Vô hiệu hoá thất bại, vui lòng thử lại"),
   });
 

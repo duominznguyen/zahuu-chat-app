@@ -8,6 +8,7 @@ import {
   Link2,
   LogOut,
   Pencil,
+  Play,
   Search,
   Tag,
   Trash2,
@@ -20,7 +21,6 @@ import { toast } from "sonner";
 import { EmptyState } from "@/components/empty-state";
 import { InfiniteScrollSentinel } from "@/components/infinite-scroll-sentinel";
 import { ListRow } from "@/components/list-row";
-import { MediaPreview } from "@/components/media-preview";
 import { UserAvatar } from "@/components/user-avatar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -456,6 +456,30 @@ function SearchView({ conversationId, onJump }: { conversationId: string; onJump
   );
 }
 
+// Ô vuông cố định cho lưới — khác MediaPreview trong bong bóng chat (giữ tỉ lệ
+// thật), ảnh/video được cắt giữa để mọi ô bằng nhau.
+function MediaGridTile({ url, isVideo, onClick }: { url: string; isVideo: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      aria-label={isVideo ? "Mở video" : "Mở ảnh"}
+      className="relative aspect-square w-full overflow-hidden rounded-sm bg-secondary transition-opacity hover:opacity-90"
+    >
+      {isVideo ? (
+        <video src={url} className="size-full object-cover" preload="metadata" muted />
+      ) : (
+        <img src={url} alt="" loading="lazy" className="size-full object-cover" />
+      )}
+      {isVideo && (
+        <span className="absolute inset-0 flex items-center justify-center bg-black/20">
+          <Play className="size-6 fill-white text-white" />
+        </span>
+      )}
+    </button>
+  );
+}
+
 function MediaListView({
   conversationId,
   kind,
@@ -481,9 +505,9 @@ function MediaListView({
       ) : items.length === 0 && !query.isLoading ? (
         <EmptyState title={kind === "MEDIA" ? "Chưa có ảnh hoặc video" : "Chưa có file nào"} />
       ) : kind === "MEDIA" ? (
-        <div className="grid grid-cols-3 gap-1 p-1">
+        <div className="grid grid-cols-3 gap-0.5 p-0.5">
           {items.map((m) => (
-            <MediaPreview
+            <MediaGridTile
               key={m.id}
               url={m.mediaUrl!}
               isVideo={m.type === "VIDEO"}

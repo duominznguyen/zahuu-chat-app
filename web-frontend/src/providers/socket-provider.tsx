@@ -1,5 +1,6 @@
 import { useQueryClient } from "@tanstack/react-query";
-import { useEffect, useRef, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useSyncExternalStore, type ReactNode } from "react";
+import type { Socket } from "socket.io-client";
 import { toast } from "sonner";
 import { connectSocket, disconnectSocket, getSocket, subscribeSocket } from "@/lib/socket";
 import { useAuthStore } from "@/store/auth-store";
@@ -15,17 +16,6 @@ export function SocketProvider({ children }: { children: ReactNode }) {
   const isAuthenticated = useAuthStore((s) => s.isAuthenticated);
   const socket = useSocket();
   const queryClient = useQueryClient();
-  // Chỉ toast "Đã kết nối lại" nếu trước đó THỰC SỰ đã rớt mạng — tránh toast
-  // thừa ngay lần connect đầu tiên lúc mới mở app.
-  const didDisconnect = useRef(false);
-  // Đọc trong handler thay vì đóng kín giá trị isAuthenticated lúc effect chạy
-  // — logout tự gọi socket.disconnect() nên cũng bắn 'disconnect', phải phân
-  // biệt được với rớt mạng thật để không hiện toast sai lúc người dùng chỉ
-  // đang chủ động đăng xuất bình thường.
-  const isAuthenticatedRef = useRef(isAuthenticated);
-  useEffect(() => {
-    isAuthenticatedRef.current = isAuthenticated;
-  }, [isAuthenticated]);
 
   useEffect(() => {
     if (!isAuthenticated) return;
@@ -35,14 +25,18 @@ export function SocketProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     if (!socket) return;
-    const onDisconnect = () => {
-      if (!isAuthenticatedRef.current) return;
-      didDisconnect.current = true;
+    // Cờ riêng cho từng socket instance: đăng nhập lại tạo socket mới nên lần
+    // connect đầu của nó không bị hiểu nhầm là "kết nối lại".
+    let didDisconnect = false;
+    const onDisconnect = (reason: Socket.DisconnectReason) => {
+      // Chính client chủ động ngắt (đăng xuất) — không phải rớt mạng.
+      if (reason === "io client disconnect") return;
+      didDisconnect = true;
       toast.info("Mất kết nối, đang thử kết nối lại...");
     };
     const onReconnect = () => {
-      if (!didDisconnect.current) return;
-      didDisconnect.current = false;
+      if (!didDisconnect) return;
+      didDisconnect = false;
       toast.success("Đã kết nối lại");
       // Dữ liệu có thể đã lỗi thời trong lúc mất kết nối (bỏ lỡ socket event)
       // -> refetch lại toàn bộ thay vì cố theo dõi chính xác đã bỏ lỡ gì.
