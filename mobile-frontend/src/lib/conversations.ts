@@ -49,6 +49,14 @@ export interface ConversationMember extends PublicUser {
   isOnline: boolean;
 }
 
+// Người đã xem tin neo (tin mới nhất viewer còn thấy) — `users` tối đa 5,
+// `count` là tổng số người đã xem để hiện "+N".
+export interface SeenBy {
+  messageId: string;
+  users: PublicUser[];
+  count: number;
+}
+
 export interface ConversationDetail {
   id: string;
   type: ConversationType;
@@ -63,6 +71,7 @@ export interface ConversationDetail {
   activeCall: ActiveCallInfo | null;
   // false khi là DIRECT và 2 người đang chặn nhau (không nói ai chặn ai).
   canMessage: boolean;
+  seenBy: SeenBy | null;
 }
 
 export const DIRECT_BLOCKED_MESSAGE = "Hiện không thể liên lạc với người này";

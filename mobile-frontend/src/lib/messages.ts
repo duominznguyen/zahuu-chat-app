@@ -17,6 +17,8 @@ export interface ReplyToPreview {
   senderId: string;
   type: MessageType;
   content: string | null;
+  mediaUrl: string | null;
+  mediaName: string | null;
   isRecalled: boolean;
 }
 

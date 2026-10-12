@@ -8,7 +8,9 @@ import {
   callTitle,
   type CallSummary,
 } from "@/lib/calls";
-import type { MessageType } from "@/lib/messages";
+import { videoPosterUrl } from "@/lib/media";
+import type { MessageType, ReplyToPreview } from "@/lib/messages";
+import { replyPreviewLabel } from "@/lib/reply-preview";
 
 import { Avatar } from "./avatar";
 
@@ -21,7 +23,10 @@ export interface MessageBubbleData {
   mediaSize?: number | null;
   call?: CallSummary | null;
   isRecalled: boolean;
-  replyTo: { content: string | null; isRecalled: boolean } | null;
+  replyTo: Pick<
+    ReplyToPreview,
+    "type" | "content" | "mediaUrl" | "mediaName" | "isRecalled"
+  > | null;
   reactionEmojis?: string[]; // vd ['like', 'love'] — đã gộp sẵn, không trùng
 }
 
@@ -40,9 +45,7 @@ interface MessageBubbleProps {
   onLongPress?: () => void;
   onPress?: () => void;
   // Mặc định Linking.openURL — truyền riêng khi cần điều hướng trong app (vd
-  // link mời zahuu://invite/<token> nên vào thẳng màn join, không qua hệ điều
-  // hành vì scheme tùy biến cần rebuild native mới nhận, không phải lúc nào
-  // cũng sẵn sàng).
+  // link mời nên vào thẳng màn join thay vì mở trình duyệt).
   onLinkPress?: (url: string) => void;
   // Câu đã dịch của tin SYSTEM — màn gọi tự dịch vì cần danh sách thành viên.
   systemText?: string;
@@ -149,7 +152,7 @@ function MediaPreview({ url, isVideo }: { url: string; isVideo: boolean }) {
       className="relative overflow-hidden rounded-2xl bg-zinc-200 dark:bg-zinc-700"
     >
       <Image
-        source={{ uri: url }}
+        source={{ uri: isVideo ? videoPosterUrl(url) : url }}
         style={{ flex: 1 }}
         contentFit="cover"
         onLoad={handleLoad}
@@ -159,6 +162,39 @@ function MediaPreview({ url, isVideo }: { url: string; isVideo: boolean }) {
           <Ionicons name="play-circle" size={40} color="#fff" />
         </View>
       )}
+    </View>
+  );
+}
+
+// Ô trích dẫn trả lời dùng chung cho bong bóng màu (TEXT/FILE) lẫn phía trên
+// ảnh/video — ảnh thu nhỏ cho IMAGE/VIDEO, các loại khác chỉ hiện nhãn.
+function ReplyQuote({
+  replyTo,
+  textClassName,
+}: {
+  replyTo: NonNullable<MessageBubbleData["replyTo"]>;
+  textClassName: string;
+}) {
+  const thumbUrl =
+    !replyTo.isRecalled && replyTo.mediaUrl
+      ? replyTo.type === "IMAGE"
+        ? replyTo.mediaUrl
+        : replyTo.type === "VIDEO"
+          ? videoPosterUrl(replyTo.mediaUrl)
+          : null
+      : null;
+  return (
+    <View className="flex-row items-center gap-1.5">
+      {thumbUrl && (
+        <Image
+          source={{ uri: thumbUrl }}
+          style={{ width: 28, height: 28, borderRadius: 4 }}
+          contentFit="cover"
+        />
+      )}
+      <Text numberOfLines={1} className={`shrink text-xs ${textClassName}`}>
+        {replyPreviewLabel(replyTo)}
+      </Text>
     </View>
   );
 }
@@ -336,14 +372,10 @@ export function MessageBubble({
               <>
                 {message.replyTo && (
                   <View className="mb-1.5 rounded-lg border-l-2 border-zinc-400 bg-zinc-100 px-2 py-1 dark:bg-zinc-800">
-                    <Text
-                      numberOfLines={1}
-                      className="text-xs text-zinc-500 dark:text-zinc-400"
-                    >
-                      {message.replyTo.isRecalled
-                        ? "Tin nhắn đã thu hồi"
-                        : message.replyTo.content}
-                    </Text>
+                    <ReplyQuote
+                      replyTo={message.replyTo}
+                      textClassName="text-zinc-500 dark:text-zinc-400"
+                    />
                   </View>
                 )}
                 <MediaPreview
@@ -358,14 +390,12 @@ export function MessageBubble({
                 <View
                   className={`mb-1.5 border-l-2 pl-2 ${isOwn ? "border-white/50" : "border-zinc-400"}`}
                 >
-                  <Text
-                    numberOfLines={1}
-                    className={`text-xs ${isOwn ? "text-white/80" : "text-zinc-500 dark:text-zinc-400"}`}
-                  >
-                    {message.replyTo.isRecalled
-                      ? "Tin nhắn đã thu hồi"
-                      : message.replyTo.content}
-                  </Text>
+                  <ReplyQuote
+                    replyTo={message.replyTo}
+                    textClassName={
+                      isOwn ? "text-white/80" : "text-zinc-500 dark:text-zinc-400"
+                    }
+                  />
                 </View>
               )}
 

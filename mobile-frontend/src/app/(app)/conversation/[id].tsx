@@ -38,6 +38,7 @@ import {
 import type { ActionSheetItem } from "@/components/ui/action-sheet";
 import { BlockedNotice } from "@/components/chat/blocked-notice";
 import { FriendshipBar } from "@/components/chat/friendship-bar";
+import { SeenByRow } from "@/components/chat/seen-by-row";
 import { ApiError, errorCodeOf } from "@/lib/api-client";
 import {
   DIRECT_BLOCKED_MESSAGE,
@@ -60,7 +61,9 @@ import {
 } from "@/lib/messages";
 import { beginCall, joinExistingCall } from "@/lib/call-actions";
 import { isCallingSupported } from "@/lib/calling-support";
+import { parseInviteToken } from "@/lib/invite-link";
 import { downloadAndShare, uploadMedia } from "@/lib/media";
+import { replyPreviewLabel } from "@/lib/reply-preview";
 import { systemMessageText } from "@/lib/system-message";
 import { useCallStore } from "@/store/call-store";
 import { useSocket } from "@/providers/socket-provider";
@@ -129,7 +132,13 @@ function applyRecall(
         if (m.replyTo?.id === messageId) {
           return {
             ...m,
-            replyTo: { ...m.replyTo, content: null, isRecalled: true },
+            replyTo: {
+              ...m.replyTo,
+              content: null,
+              mediaUrl: null,
+              mediaName: null,
+              isRecalled: true,
+            },
           };
         }
         return m;
@@ -265,11 +274,19 @@ export default function Conversation() {
     socket.emit("conversation:join", { conversationId: id });
     const timeouts = typingTimeouts.current;
 
+    // seenBy do backend tính theo tin neo (tin mới nhất) — tin mới đổi tin neo,
+    // ai đã đọc đổi thì đổi danh sách người xem: cả 2 đều phải tải lại chi tiết.
+    const refreshDetail = () =>
+      queryClient.invalidateQueries({
+        queryKey: ["conversations", "detail", id],
+      });
+
     const onNew = (message: Message) => {
       if (message.conversationId !== id) return;
       queryClient.setQueryData<MessagesCache>(["messages", id], (old) =>
         prependMessage(old, message),
       );
+      refreshDetail();
       if (message.sender.id !== myId) markReadIfNeeded(message.id);
     };
     const onRecalled = ({
@@ -303,25 +320,8 @@ export default function Conversation() {
         })),
       );
     };
-    const onRead = ({
-      userId,
-      lastReadMessageId,
-    }: {
-      userId: string;
-      lastReadMessageId: string;
-    }) => {
-      queryClient.setQueryData<ConversationDetail>(
-        ["conversations", "detail", id],
-        (old) => {
-          if (!old) return old;
-          return {
-            ...old,
-            members: old.members.map((m) =>
-              m.id === userId ? { ...m, lastReadMessageId } : m,
-            ),
-          };
-        },
-      );
+    const onRead = ({ conversationId }: { conversationId: string }) => {
+      if (conversationId === id) refreshDetail();
     };
 
     const onTyping = ({
@@ -548,9 +548,8 @@ export default function Conversation() {
   // Linking.openURL/hệ điều hành: scheme zahuu:// cần rebuild native mới được
   // đăng ký, không phải lúc nào Dev Client đang cài cũng đã có sẵn.
   const handleLinkPress = async (url: string) => {
-    const inviteMatch = url.match(/^zahuu:\/\/invite\/(.+)$/);
-    if (inviteMatch) {
-      const token = inviteMatch[1];
+    const token = parseInviteToken(url);
+    if (token) {
       // Kiểm tra trước ngay tại đây (không điều hướng) — nếu đã là thành viên
       // thì xử lý gọn luôn, không cần qua màn /invite/[token] (tránh cảm giác
       // "chuyển màn đen rồi quay lại" dù chỉ xác nhận thứ mình đã biết).
@@ -587,6 +586,10 @@ export default function Conversation() {
       queryClient.setQueryData<MessagesCache>(["messages", id], (old) =>
         removeMessageFromCache(old, messageId),
       );
+      // Xoá chính tin neo làm đổi tin neo của seenBy — không có socket nên tự làm mới.
+      queryClient.invalidateQueries({
+        queryKey: ["conversations", "detail", id],
+      });
     },
   });
 
@@ -603,10 +606,10 @@ export default function Conversation() {
     mutationFn: (messageId: string) => removeReaction(messageId),
   });
 
-  // otherMember chỉ dùng cho "Đã xem" (DIRECT-only) — tên/avatar hiện trên
-  // header lấy thẳng name/avatarUrl đã resolve sẵn từ backend (đúng cho cả
-  // DIRECT lẫn GROUP), không tự suy ra từ members để tránh lấy nhầm avatar
-  // của 1 thành viên bất kỳ làm avatar nhóm.
+  // otherMember chỉ có ở DIRECT (online, thanh kết bạn, chặn nhau) — tên/avatar
+  // hiện trên header lấy thẳng name/avatarUrl đã resolve sẵn từ backend (đúng
+  // cho cả DIRECT lẫn GROUP), không tự suy ra từ members để tránh lấy nhầm
+  // avatar của 1 thành viên bất kỳ làm avatar nhóm.
   const isDirect = detailQuery.data?.type === "DIRECT";
   const otherMember = isDirect
     ? detailQuery.data?.members.find((m) => m.id !== myId)
@@ -629,6 +632,10 @@ export default function Conversation() {
     callInfo.id !== activeCallId
       ? callInfo
       : null;
+
+  // Hàng avatar "đã xem" hiện dưới tin neo (tin mới nhất mình còn thấy, kể cả
+  // tin của người khác) — cho cả DIRECT lẫn GROUP.
+  const seenBy = detailQuery.data?.seenBy;
 
   const typingNames = typingUserIds.map(
     (uid) =>
@@ -778,6 +785,10 @@ export default function Conversation() {
           <FlatList
             className="flex-1"
             data={messages}
+            // Dòng tin còn phụ thuộc chi tiết hội thoại (seenBy, tên thành
+            // viên cho tin SYSTEM, canMessage) — đổi thì phải vẽ lại dù
+            // danh sách tin nhắn không đổi.
+            extraData={detailQuery.data}
             inverted
             keyExtractor={(item) => item.id}
             onEndReached={() => {
@@ -786,7 +797,8 @@ export default function Conversation() {
             contentContainerClassName="px-3 py-2"
             renderItem={({ item, index }) => {
               const isOwn = item.sender.id === myId;
-              const seen = isOwn && otherMember?.lastReadMessageId === item.id;
+              const showSeenBy =
+                !!seenBy && seenBy.messageId === item.id && seenBy.count > 0;
               // messages mới nhất trước (index 0 = mới nhất = hiện dưới cùng do
               // inverted) -> tin ở index-1 là tin GẦN ĐÂY HƠN (hiện dưới tin này),
               // tin ở index+1 là tin CŨ HƠN (hiện phía TRÊN tin này).
@@ -859,22 +871,13 @@ export default function Conversation() {
                       mediaSize: item.mediaSize,
                       call: item.call,
                       isRecalled: item.isRecalled,
-                      replyTo: item.replyTo
-                        ? {
-                            content: item.replyTo.content,
-                            isRecalled: item.replyTo.isRecalled,
-                          }
-                        : null,
+                      replyTo: item.replyTo,
                       reactionEmojis: Array.from(
                         new Set(item.reactions.map((r) => r.reactionType)),
                       ),
                     }}
                   />
-                  {seen && (
-                    <Text className="-mt-1 mb-2 text-right text-xs text-zinc-400">
-                      Đã xem
-                    </Text>
-                  )}
+                  {showSeenBy && <SeenByRow seenBy={seenBy} />}
                 </View>
               );
             }}
@@ -905,10 +908,7 @@ export default function Conversation() {
             numberOfLines={1}
             className="flex-1 text-sm text-zinc-500 dark:text-zinc-400"
           >
-            Trả lời:{" "}
-            {replyTarget.isRecalled
-              ? "Tin nhắn đã thu hồi"
-              : replyTarget.content}
+            Trả lời: {replyPreviewLabel(replyTarget)}
           </Text>
           <Pressable onPress={() => setReplyTarget(null)} className="px-2">
             <Text className="text-zinc-400">✕</Text>
