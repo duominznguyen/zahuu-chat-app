@@ -45,6 +45,7 @@ export function ChatInput({
       className="flex-row items-end gap-2 border-t border-zinc-200 bg-white px-3 pt-2 dark:border-zinc-800 dark:bg-zinc-900"
     >
       <Pressable
+        accessibilityLabel="Đính kèm"
         onPress={onAttach}
         className="h-10 w-10 items-center justify-center"
       >
@@ -59,6 +60,7 @@ export function ChatInput({
         className="max-h-28 flex-1 rounded-2xl bg-zinc-100 px-4 py-2.5 text-base text-zinc-900 dark:bg-zinc-800 dark:text-zinc-100"
       />
       <Pressable
+        accessibilityLabel="Gửi"
         onPress={handleSend}
         disabled={!text.trim()}
         className={`h-10 w-10 items-center justify-center rounded-full ${

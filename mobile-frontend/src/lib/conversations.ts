@@ -61,7 +61,11 @@ export interface ConversationDetail {
   members: ConversationMember[];
   // Cuộc gọi đang đổ chuông/diễn ra, để hiện banner "Tham gia" trên header.
   activeCall: ActiveCallInfo | null;
+  // false khi là DIRECT và 2 người đang chặn nhau (không nói ai chặn ai).
+  canMessage: boolean;
 }
+
+export const DIRECT_BLOCKED_MESSAGE = "Hiện không thể liên lạc với người này";
 
 export function getConversationDetail(id: string) {
   return apiClient.get<ConversationDetail>(`/conversations/${id}`);

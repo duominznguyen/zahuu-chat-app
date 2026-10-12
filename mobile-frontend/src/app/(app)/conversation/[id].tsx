@@ -36,7 +36,11 @@ import {
   useToast,
 } from "@/components/ui";
 import type { ActionSheetItem } from "@/components/ui/action-sheet";
+import { BlockedNotice } from "@/components/chat/blocked-notice";
+import { FriendshipBar } from "@/components/chat/friendship-bar";
+import { ApiError, errorCodeOf } from "@/lib/api-client";
 import {
+  DIRECT_BLOCKED_MESSAGE,
   getConversationDetail,
   previewInviteLink,
   type ConversationDetail,
@@ -209,12 +213,28 @@ export default function Conversation() {
     queryFn: () => getConversationDetail(id),
   });
 
+  // Mở 1 hội thoại không còn là thành viên (bị xoá/đã rời/nhóm giải tán ở
+  // thiết bị khác) trả 404 — không xử lý sẽ kẹt ở màn trống tiêu đề "...".
+  // Message trung lập vì 404 không phân biệt được các trường hợp này.
+  useEffect(() => {
+    if (
+      detailQuery.error instanceof ApiError &&
+      detailQuery.error.status === 404
+    ) {
+      toast.show("Hội thoại này không còn khả dụng");
+      router.replace("/");
+    }
+  }, [detailQuery.error, router, toast]);
+
   const messagesQuery = useInfiniteQuery({
     queryKey: ["messages", id],
     queryFn: ({ pageParam }: { pageParam?: string }) =>
       listMessages(id, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    // Lúc không mở màn này, socket vẫn có thể bỏ lỡ tin mới — cache cũ khiến
+    // "đánh dấu đã đọc" gửi id tin cũ. Luôn lấy mới khi mở lại.
+    staleTime: 0,
   });
 
   const messages = messagesQuery.data?.pages.flatMap((p) => p.items) ?? [];
@@ -222,9 +242,17 @@ export default function Conversation() {
   const markReadIfNeeded = (messageId: string) => {
     if (lastMarkedReadId.current === messageId) return;
     lastMarkedReadId.current = messageId;
-    markRead(id, messageId).catch(() => {
-      lastMarkedReadId.current = null;
-    });
+    // Tab Tin nhắn suy "chưa đọc" từ lastReadMessageId — không có socket nào
+    // báo khi chính mình đọc, nên phải tự làm mới để chấm xanh biến mất.
+    markRead(id, messageId)
+      .then(() =>
+        queryClient.invalidateQueries({
+          queryKey: ["conversations", "list"],
+        }),
+      )
+      .catch(() => {
+        lastMarkedReadId.current = null;
+      });
   };
 
   useEffect(() => {
@@ -415,8 +443,21 @@ export default function Conversation() {
     onSuccess: () => setReplyTarget(null),
     // Không tự chèn vào cache ở đây — message:new sẽ tự đến qua socket (server
     // broadcast cho mọi member trong room, kể cả chính người gửi).
-    onError: () => toast.show("Gửi tin nhắn thất bại, vui lòng thử lại"),
+    onError: (err) => {
+      if (handleBlockedError(err)) return;
+      toast.show("Gửi tin nhắn thất bại, vui lòng thử lại");
+    },
   });
+
+  // Vừa bị chặn mà màn chưa kịp cập nhật — báo và tải lại chi tiết để khoá ô nhập.
+  function handleBlockedError(err: unknown) {
+    if (errorCodeOf(err) !== "DIRECT_BLOCKED") return false;
+    toast.show(DIRECT_BLOCKED_MESSAGE);
+    queryClient.invalidateQueries({
+      queryKey: ["conversations", "detail", id],
+    });
+    return true;
+  }
 
   const recallMutation = useMutation({
     mutationFn: (messageId: string) => recallMessage(messageId),
@@ -486,6 +527,7 @@ export default function Conversation() {
           : undefined,
       );
     } catch (e) {
+      if (handleBlockedError(e)) return;
       toast.show(
         e instanceof Error ? e.message : "Gửi thất bại, vui lòng thử lại",
       );
@@ -572,13 +614,17 @@ export default function Conversation() {
   const title = detailQuery.data?.name ?? "...";
   const headerSubtitle =
     isDirect && otherMember?.isOnline ? "Đang hoạt động" : undefined;
+  // 2 người chặn nhau thì không gửi tin/gọi được — ẩn mọi lối vào thay vì để
+  // người dùng bấm rồi mới nhận lỗi.
+  const canMessage = detailQuery.data?.canMessage ?? true;
+  const canCall = isCallingSupported && canMessage;
 
   const iconColor = colorScheme === "dark" ? "#f4f4f5" : "#18181b";
   // Banner "Tham gia" chỉ cho cuộc gọi đã có người nghe mà mình chưa ở trong đó —
   // cuộc gọi đang đổ chuông đã có overlay/banner nhận cuộc gọi riêng.
   const callInfo = detailQuery.data?.activeCall;
   const ongoingCall =
-    isCallingSupported &&
+    canCall &&
     callInfo?.status === "ONGOING" &&
     callInfo.id !== activeCallId
       ? callInfo
@@ -660,7 +706,7 @@ export default function Conversation() {
         onTitlePress={() => router.push(`/conversation-info/${id}`)}
         right={
           <View className="flex-row items-center gap-1">
-            {isCallingSupported && (
+            {canCall && (
               <>
                 <Pressable
                   accessibilityLabel="Gọi thoại"
@@ -692,6 +738,10 @@ export default function Conversation() {
           </View>
         }
       />
+
+      {otherMember && canMessage && (
+        <FriendshipBar userId={otherMember.id} name={title} />
+      )}
 
       {ongoingCall && (
         <View className="flex-row items-center justify-between bg-success px-4 py-2">
@@ -779,7 +829,7 @@ export default function Conversation() {
                       isInteractive ? () => setMenuTarget(item) : undefined
                     }
                     onCallBack={
-                      isCallingSupported && item.call
+                      canCall && item.call
                         ? () => void beginCall(id, item.call!.type)
                         : undefined
                     }
@@ -874,15 +924,19 @@ export default function Conversation() {
         </View>
       )}
 
-      <ChatInput
-        onSend={(text) => sendMutation.mutate(text)}
-        onAttach={() => setAttachSheetOpen(true)}
-        onTypingChange={(isTyping) => {
-          socket?.emit(isTyping ? "message:typing" : "message:stopTyping", {
-            conversationId: id,
-          });
-        }}
-      />
+      {!canMessage && otherMember ? (
+        <BlockedNotice userId={otherMember.id} />
+      ) : (
+        <ChatInput
+          onSend={(text) => sendMutation.mutate(text)}
+          onAttach={() => setAttachSheetOpen(true)}
+          onTypingChange={(isTyping) => {
+            socket?.emit(isTyping ? "message:typing" : "message:stopTyping", {
+              conversationId: id,
+            });
+          }}
+        />
+      )}
 
       <ActionSheet
         visible={attachSheetOpen}

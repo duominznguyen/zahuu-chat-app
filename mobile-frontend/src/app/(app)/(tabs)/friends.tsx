@@ -93,10 +93,14 @@ export default function FriendsTab() {
           Bạn bè
         </Text>
         <View className="flex-row gap-4">
-          <Pressable onPress={() => setSearchSheetOpen(true)}>
+          <Pressable
+            accessibilityLabel="Tìm bạn bè"
+            onPress={() => setSearchSheetOpen(true)}
+          >
             <Ionicons name="search" size={24} color="#71717a" />
           </Pressable>
           <Pressable
+            accessibilityLabel="Lời mời kết bạn"
             onPress={() => router.push("/friend-requests")}
             className="relative"
           >
