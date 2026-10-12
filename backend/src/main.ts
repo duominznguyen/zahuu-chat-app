@@ -1,6 +1,7 @@
 import { NestFactory } from '@nestjs/core';
 import { ConfigService } from '@nestjs/config';
 import cookieParser from 'cookie-parser';
+import express from 'express';
 import { AppModule } from './app.module.js';
 import { RedisIoAdapter } from './redis/redis-io.adapter.js';
 
@@ -17,6 +18,12 @@ async function bootstrap() {
   );
   const config = app.get(ConfigService);
 
+  // LiveKit gửi webhook với Content-Type application/webhook+json, body parser mặc định
+  // bỏ qua type này nên phải nhận raw buffer để xác thực chữ ký trên đúng byte gốc.
+  app.use(
+    '/calls/webhooks/livekit',
+    express.raw({ type: 'application/webhook+json' }),
+  );
   app.use(cookieParser());
   app.enableCors({
     origin: config

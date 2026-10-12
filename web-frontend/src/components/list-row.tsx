@@ -10,6 +10,8 @@ interface ListRowProps {
   // Đậm hơn mức mặc định — dùng cho conversation chưa đọc, phân biệt rõ hơn
   // "font-medium" tiêu chuẩn của title/subtitle.
   emphasized?: boolean;
+  // Tô đỏ title — dùng cho hành động phá hủy (Rời nhóm, Giải tán nhóm...).
+  destructive?: boolean;
 }
 
 // Dùng div thay vì button cho cả hàng — trailing thường chứa nút/menu riêng
@@ -23,6 +25,7 @@ export function ListRow({
   onClick,
   active,
   emphasized,
+  destructive,
 }: ListRowProps) {
   const handleKeyDown = (e: KeyboardEvent<HTMLDivElement>) => {
     if (onClick && (e.key === "Enter" || e.key === " ")) {
@@ -49,7 +52,9 @@ export function ListRow({
     >
       {leading}
       <div className="min-w-0 flex-1">
-        <p className={`truncate text-sm text-foreground ${emphasized ? "font-semibold" : "font-medium"}`}>
+        <p
+          className={`truncate text-sm ${destructive ? "text-destructive" : "text-foreground"} ${emphasized ? "font-semibold" : "font-medium"}`}
+        >
           {title}
         </p>
         {subtitle && (

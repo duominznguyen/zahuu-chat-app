@@ -16,6 +16,7 @@ import { UsersModule } from './users/users.module.js';
 import { MediaModule } from './media/media.module.js';
 import { FriendsModule } from './friends/friends.module.js';
 import { ConversationsModule } from './conversations/conversations.module.js';
+import { CallsModule } from './calls/calls.module.js';
 import { MessagesModule } from './messages/messages.module.js';
 import { ChatModule } from './chat/chat.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
@@ -42,6 +43,7 @@ import { NotificationsModule } from './notifications/notifications.module.js';
     FriendsModule,
     ConversationsModule,
     MessagesModule,
+    CallsModule,
     ChatModule,
     NotificationsModule,
   ],

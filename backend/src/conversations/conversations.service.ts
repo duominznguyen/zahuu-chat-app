@@ -9,10 +9,14 @@ import { EventEmitter2 } from '@nestjs/event-emitter';
 import { randomBytes } from 'node:crypto';
 import { assertActiveUser } from '../common/assert-active-user.js';
 import { assertCallerActive } from '../common/assert-caller-active.js';
+import { escapeLike } from '../common/escape-like.js';
+import { isDirectBlocked } from '../common/direct-block.js';
 import { isUniqueViolation } from '../common/prisma-errors.js';
 import { orderedPair } from '../common/ordered-pair.js';
 import type { ConversationMembership } from './decorators/membership.decorator.js';
 import {
+  CallStatus,
+  CallType,
   ConversationType,
   MemberRole,
   MessageType,
@@ -24,6 +28,7 @@ import { MediaService } from '../media/media.service.js';
 import { PrismaService } from '../prisma/prisma.service.js';
 import type { UpdateBackgroundDto } from './dto/update-background.dto.js';
 import type { UpdateConversationDto } from './dto/update-conversation.dto.js';
+import { pickSeenBy } from './seen-by.js';
 
 const publicUserSelect = {
   id: true,
@@ -32,7 +37,37 @@ const publicUserSelect = {
   avatarUrl: true,
 } as const;
 
+const systemMessageSelect = {
+  id: true,
+  conversationId: true,
+  type: true,
+  content: true,
+  createdAt: true,
+  sender: { select: publicUserSelect },
+} as const;
+
+function callPreviewText(call: { type: CallType; status: CallStatus }) {
+  if (call.status === CallStatus.MISSED) return 'Cuộc gọi nhỡ';
+  if (call.status === CallStatus.DECLINED) return 'Đã từ chối cuộc gọi';
+  return call.type === CallType.VIDEO ? 'Cuộc gọi video' : 'Cuộc gọi thoại';
+}
+
+type SystemMessageContent = {
+  event: string;
+  actorId: string;
+  targetId?: string;
+  // Snapshot displayName của target NGAY LÚC tạo tin — target có thể không
+  // còn là thành viên khi tin được đọc lại sau này (member_removed/
+  // member_left luôn rơi vào đúng tình huống này), lúc đó không còn cách nào
+  // tra ngược lại tên qua `members` nữa nên phải lưu sẵn, không dựa hoàn
+  // toàn vào lookup runtime (xem translateSystemMessage/system-message.ts).
+  targetName?: string;
+  newName?: string;
+  nickname?: string;
+};
+
 const LIST_DEFAULT_LIMIT = 30;
+const SEARCH_LIMIT = 20;
 
 @Injectable()
 export class ConversationsService {
@@ -47,7 +82,15 @@ export class ConversationsService {
     const take = limit ?? LIST_DEFAULT_LIMIT;
 
     const conversations = await this.prisma.conversation.findMany({
-      where: { members: { some: { userId } } },
+      where: {
+        members: { some: { userId } },
+        // DIRECT chưa có tin nào (vừa mở từ ô tìm kiếm/profile) chưa hiện ra,
+        // để người kia không thấy 1 đoạn chat rỗng chỉ vì mình bấm vào.
+        OR: [
+          { type: ConversationType.GROUP },
+          { lastMessageId: { not: null } },
+        ],
+      },
       orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
       take: take + 1,
       ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
@@ -67,6 +110,8 @@ export class ConversationsService {
             content: true,
             isRecalled: true,
             senderId: true,
+            sender: { select: { displayName: true } },
+            call: { select: { type: true, status: true } },
           },
         },
       },
@@ -102,7 +147,8 @@ export class ConversationsService {
 
     // Socket chỉ báo được lúc CHUYỂN trạng thái online/offline, không có cách
     // nào biết trạng thái HIỆN TẠI lúc mới load trang — phải tự tra Redis.
-    const onlineMap = await this.presence.isOnlineBatch(
+    const onlineMap = await this.friendsOnlineMap(
+      userId,
       directTargets.map((t) => t.targetUserId),
     );
 
@@ -110,6 +156,104 @@ export class ConversationsService {
       this.toSummary(c, userId, nicknameMap, onlineMap),
     );
     return { items, nextCursor: hasMore ? page[page.length - 1].id : null };
+  }
+
+  // Ô tìm kiếm của danh sách chat: nhóm theo tên nhóm + chat 1-1 với người
+  // CHƯA là bạn (bạn bè đã có mục riêng qua GET /friends/search, tránh trùng).
+  // Chỉ trong các conversation người dùng đang là thành viên.
+  async searchConversations(userId: string, q: string) {
+    const needle = escapeLike(q);
+    const otherMember = { userId: { not: userId } };
+    // Người kia không phải bạn của userId — Friendship lưu cặp có thứ tự nên
+    // phải loại cả 2 chiều.
+    const notFriend = {
+      friendshipsAsUser1: { none: { userId2: userId } },
+      friendshipsAsUser2: { none: { userId1: userId } },
+    };
+
+    const [groups, directs] = await Promise.all([
+      this.prisma.conversation.findMany({
+        where: {
+          type: ConversationType.GROUP,
+          members: { some: { userId } },
+          name: { contains: needle },
+        },
+        orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+        take: SEARCH_LIMIT,
+        select: {
+          id: true,
+          name: true,
+          avatarUrl: true,
+          _count: { select: { members: true } },
+        },
+      }),
+      this.prisma.conversation.findMany({
+        where: {
+          type: ConversationType.DIRECT,
+          // Giống danh sách chat: DIRECT chưa có tin nào coi như chưa tồn tại.
+          lastMessageId: { not: null },
+          AND: [
+            { members: { some: { userId } } },
+            { members: { some: { ...otherMember, user: notFriend } } },
+            {
+              OR: [
+                {
+                  members: {
+                    some: {
+                      ...otherMember,
+                      user: { displayName: { contains: needle } },
+                    },
+                  },
+                },
+                // Tên hiển thị trong chat ưu tiên biệt danh nên cũng tìm theo nó.
+                {
+                  nicknames: {
+                    some: {
+                      targetUserId: { not: userId },
+                      nickname: { contains: needle },
+                    },
+                  },
+                },
+              ],
+            },
+          ],
+        },
+        orderBy: [{ lastMessageAt: 'desc' }, { id: 'desc' }],
+        take: SEARCH_LIMIT,
+        select: {
+          id: true,
+          members: {
+            where: otherMember,
+            select: { user: { select: publicUserSelect } },
+          },
+          nicknames: {
+            where: { targetUserId: { not: userId } },
+            select: { nickname: true },
+          },
+        },
+      }),
+    ]);
+
+    return {
+      groups: groups.map((g) => ({
+        id: g.id,
+        name: g.name,
+        avatarUrl: g.avatarUrl,
+        memberCount: g._count.members,
+      })),
+      directs: directs.flatMap((c) => {
+        const other = c.members[0]?.user;
+        if (!other) return [];
+        return [
+          {
+            id: c.id,
+            name: c.nicknames[0]?.nickname ?? other.displayName,
+            avatarUrl: other.avatarUrl,
+            otherUser: { id: other.id, username: other.username },
+          },
+        ];
+      }),
+    };
   }
 
   async getConversationDetail(conversationId: string, viewerId: string) {
@@ -135,7 +279,10 @@ export class ConversationsService {
     const nicknameMap = new Map(
       conv.nicknames.map((n) => [n.targetUserId, n.nickname]),
     );
-    const onlineMap = await this.presence.isOnlineBatch(
+    // Client dùng để ẩn ô nhập/nút gọi thay vì để người dùng gõ rồi mới nhận 403.
+    const canMessage = !(await isDirectBlocked(this.prisma, conv.id));
+    const onlineMap = await this.friendsOnlineMap(
+      viewerId,
       conv.members.map((m) => m.userId),
     );
     const members = conv.members.map((m) => ({
@@ -149,7 +296,18 @@ export class ConversationsService {
     }));
     const me = conv.members.find((m) => m.userId === viewerId);
 
+    // Chỉ có tối đa 1 cuộc gọi hoạt động / conversation (unique activeConversationId).
+    const activeCall = await this.prisma.call.findUnique({
+      where: { activeConversationId: conversationId },
+      select: { id: true, type: true, status: true, startedById: true },
+    });
+
+    const seenBy = await this.loadSeenBy(conv.id, viewerId, conv.lastMessageId);
+
     const base = {
+      activeCall,
+      seenBy,
+      canMessage,
       id: conv.id,
       type: conv.type,
       backgroundUrl: conv.backgroundUrl,
@@ -170,17 +328,92 @@ export class ConversationsService {
     };
   }
 
-  async createDirect(userId: string, friendId: string) {
-    if (userId === friendId) {
+  // Người đã xem = cursor đọc đã tới tin neo trở lên. Neo là tin mới nhất
+  // mà viewer còn thấy (không bị xoá-cho-mình), để hàng avatar không biến mất
+  // khi người xem xoá tin mới nhất của đoạn chat.
+  private async loadSeenBy(
+    conversationId: string,
+    viewerId: string,
+    lastMessageId: string | null,
+  ) {
+    const anchor = await this.findSeenAnchor(
+      conversationId,
+      viewerId,
+      lastMessageId,
+    );
+    if (!anchor) return null;
+
+    const readers = await this.prisma.conversationMember.findMany({
+      where: {
+        conversationId,
+        userId: { notIn: [viewerId, anchor.senderId] },
+        lastReadMessageId: { not: null },
+        user: { deactivatedAt: null },
+      },
+      select: {
+        userId: true,
+        lastReadMessageId: true,
+        user: { select: publicUserSelect },
+      },
+    });
+    if (readers.length === 0) {
+      return { messageId: anchor.id, users: [], count: 0 };
+    }
+
+    // Cần createdAt của cursor để so tuple (createdAt, id) với tin neo.
+    const cursors = await this.prisma.message.findMany({
+      where: { id: { in: readers.map((r) => r.lastReadMessageId!) } },
+      select: { id: true, createdAt: true },
+    });
+    const cursorById = new Map(cursors.map((c) => [c.id, c]));
+
+    const candidates = readers.flatMap((r) => {
+      const cursor = cursorById.get(r.lastReadMessageId!);
+      return cursor ? [{ userId: r.userId, cursor, user: r.user }] : [];
+    });
+
+    const { users, count } = pickSeenBy(anchor, candidates, viewerId);
+    return { messageId: anchor.id, users, count };
+  }
+
+  private async findSeenAnchor(
+    conversationId: string,
+    viewerId: string,
+    lastMessageId: string | null,
+  ) {
+    const select = { id: true, createdAt: true, senderId: true } as const;
+    const visibleToViewer = { deletions: { none: { userId: viewerId } } };
+
+    // Đường nhanh: conv.lastMessageId thường chính là tin neo, tránh query sắp xếp.
+    if (lastMessageId) {
+      const last = await this.prisma.message.findFirst({
+        where: { id: lastMessageId, ...visibleToViewer },
+        select,
+      });
+      if (last) return last;
+    }
+
+    return this.prisma.message.findFirst({
+      where: { conversationId, ...visibleToViewer },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select,
+    });
+  }
+
+  // Không yêu cầu là bạn bè: người lạ (tìm qua @username) cũng nhắn được.
+  // Conversation tạo ra chưa hiện trong danh sách của ai cho tới khi có tin
+  // đầu tiên (xem listConversations).
+  async createDirect(userId: string, otherUserId: string) {
+    if (userId === otherUserId) {
       throw new BadRequestException(
         'Không thể tạo cuộc trò chuyện với chính mình',
       );
     }
     await assertCallerActive(this.prisma, userId);
-    await assertActiveUser(this.prisma, friendId);
-    await this.assertFriends(userId, friendId);
+    await assertActiveUser(this.prisma, otherUserId);
+    await this.assertNotBlocked(userId, otherUserId);
 
-    const pair = orderedPair(userId, friendId);
+    const pair = orderedPair(userId, otherUserId);
     const existing = await this.prisma.conversation.findUnique({
       where: { userId1_userId2: pair },
       select: { id: true },
@@ -192,11 +425,11 @@ export class ConversationsService {
         data: {
           type: ConversationType.DIRECT,
           ...pair,
-          members: { create: [{ userId }, { userId: friendId }] },
+          members: { create: [{ userId }, { userId: otherUserId }] },
         },
         select: { id: true },
       });
-      await this.emitMembersAdded(conv.id, [userId, friendId], {
+      await this.emitMembersAdded(conv.id, [userId, otherUserId], {
         addedById: userId,
         notifiable: false,
       });
@@ -283,9 +516,35 @@ export class ConversationsService {
       );
     }
 
-    await this.prisma.conversation.update({
-      where: { id: membership.conversationId },
-      data: { name: dto.name, avatarUrl: dto.avatarUrl },
+    const systemMessages = await this.prisma.$transaction(async (tx) => {
+      await tx.conversation.update({
+        where: { id: membership.conversationId },
+        data: { name: dto.name, avatarUrl: dto.avatarUrl },
+      });
+      const messages: Awaited<ReturnType<typeof this.createSystemMessage>>[] =
+        [];
+      if (dto.name !== undefined) {
+        messages.push(
+          await this.createSystemMessage(
+            tx,
+            membership.conversationId,
+            membership.userId,
+            'name_changed',
+            { newName: dto.name },
+          ),
+        );
+      }
+      if (dto.avatarUrl !== undefined) {
+        messages.push(
+          await this.createSystemMessage(
+            tx,
+            membership.conversationId,
+            membership.userId,
+            'avatar_changed',
+          ),
+        );
+      }
+      return messages;
     });
     this.events.emit('group.updated', {
       conversationId: membership.conversationId,
@@ -294,6 +553,7 @@ export class ConversationsService {
         ...(dto.avatarUrl !== undefined && { avatarUrl: dto.avatarUrl }),
       },
     });
+    for (const m of systemMessages) this.emitSystemMessage(m);
     return this.getConversationDetail(
       membership.conversationId,
       membership.userId,
@@ -311,14 +571,23 @@ export class ConversationsService {
         dto.url,
       );
     }
-    await this.prisma.conversation.update({
-      where: { id: membership.conversationId },
-      data: { backgroundUrl: dto.url },
+    const systemMessage = await this.prisma.$transaction(async (tx) => {
+      await tx.conversation.update({
+        where: { id: membership.conversationId },
+        data: { backgroundUrl: dto.url },
+      });
+      return this.createSystemMessage(
+        tx,
+        membership.conversationId,
+        membership.userId,
+        'background_changed',
+      );
     });
     this.events.emit('group.updated', {
       conversationId: membership.conversationId,
       changedFields: { backgroundUrl: dto.url },
     });
+    this.emitSystemMessage(systemMessage);
     return this.getConversationDetail(
       membership.conversationId,
       membership.userId,
@@ -328,20 +597,24 @@ export class ConversationsService {
   async leaveConversation(membership: ConversationMembership) {
     await this.assertGroup(membership.conversationId);
 
-    const groupDeleted = await this.prisma.$transaction(async (tx) => {
+    const result = await this.prisma.$transaction(async (tx) => {
+      let promotedUserId: string | null = null;
+      let promotedDisplayName: string | null = null;
       if (membership.role === MemberRole.ADMIN) {
-        const canContinue = await this.promoteNextAdminIfNeeded(
+        const promotion = await this.promoteNextAdminIfNeeded(
           tx,
           membership.conversationId,
           membership.userId,
         );
-        if (!canContinue) {
+        if (!promotion.canContinue) {
           // Không còn ai khác -> xóa hẳn nhóm (cascade xóa luôn membership này)
           await tx.conversation.delete({
             where: { id: membership.conversationId },
           });
-          return true;
+          return { groupDeleted: true as const };
         }
+        promotedUserId = promotion.promotedUserId;
+        promotedDisplayName = promotion.promotedDisplayName;
       }
       await tx.conversationMember.delete({
         where: {
@@ -351,15 +624,32 @@ export class ConversationsService {
           },
         },
       });
-      return false;
+      const leftMessage = await this.createSystemMessage(
+        tx,
+        membership.conversationId,
+        membership.userId,
+        'member_left',
+      );
+      const promotedMessage = promotedUserId
+        ? await this.createSystemMessage(
+            tx,
+            membership.conversationId,
+            promotedUserId,
+            'role_promoted',
+            { targetId: promotedUserId, targetName: promotedDisplayName },
+          )
+        : null;
+      return { groupDeleted: false as const, leftMessage, promotedMessage };
     });
 
     // Nhóm đã bị xóa hẳn thì không còn room nào để báo
-    if (!groupDeleted) {
+    if (!result.groupDeleted) {
       this.events.emit('group.member.removed', {
         conversationId: membership.conversationId,
         userId: membership.userId,
       });
+      this.emitSystemMessage(result.leftMessage);
+      if (result.promotedMessage) this.emitSystemMessage(result.promotedMessage);
     }
   }
 
@@ -380,19 +670,32 @@ export class ConversationsService {
     await this.assertFriends(membership.userId, targetUserId);
 
     let member;
+    let systemMessage;
     try {
-      member = await this.prisma.conversationMember.create({
-        data: {
-          conversationId: membership.conversationId,
-          userId: targetUserId,
-          role: MemberRole.MEMBER,
+      ({ member, systemMessage } = await this.prisma.$transaction(
+        async (tx) => {
+          const created = await tx.conversationMember.create({
+            data: {
+              conversationId: membership.conversationId,
+              userId: targetUserId,
+              role: MemberRole.MEMBER,
+            },
+            select: {
+              role: true,
+              joinedAt: true,
+              user: { select: publicUserSelect },
+            },
+          });
+          const systemMessage = await this.createSystemMessage(
+            tx,
+            membership.conversationId,
+            membership.userId,
+            'member_added',
+            { targetId: targetUserId, targetName: created.user.displayName },
+          );
+          return { member: created, systemMessage };
         },
-        select: {
-          role: true,
-          joinedAt: true,
-          user: { select: publicUserSelect },
-        },
-      });
+      ));
     } catch (e) {
       if (isUniqueViolation(e)) {
         throw new ConflictException({
@@ -409,6 +712,7 @@ export class ConversationsService {
       addedById: membership.userId,
       notify: true,
     });
+    this.emitSystemMessage(systemMessage);
     return this.getConversationDetail(
       membership.conversationId,
       membership.userId,
@@ -424,19 +728,40 @@ export class ConversationsService {
       );
     }
 
-    const { count } = await this.prisma.conversationMember.deleteMany({
-      where: {
-        conversationId: membership.conversationId,
-        userId: targetUserId,
-      },
+    const systemMessage = await this.prisma.$transaction(async (tx) => {
+      const target = await tx.conversationMember.findUnique({
+        where: {
+          conversationId_userId: {
+            conversationId: membership.conversationId,
+            userId: targetUserId,
+          },
+        },
+        select: { user: { select: { displayName: true } } },
+      });
+      if (!target) {
+        throw new NotFoundException('Người này không phải thành viên');
+      }
+      await tx.conversationMember.delete({
+        where: {
+          conversationId_userId: {
+            conversationId: membership.conversationId,
+            userId: targetUserId,
+          },
+        },
+      });
+      return this.createSystemMessage(
+        tx,
+        membership.conversationId,
+        membership.userId,
+        'member_removed',
+        { targetId: targetUserId, targetName: target.user.displayName },
+      );
     });
-    if (count === 0) {
-      throw new NotFoundException('Người này không phải thành viên');
-    }
     this.events.emit('group.member.removed', {
       conversationId: membership.conversationId,
       userId: targetUserId,
     });
+    this.emitSystemMessage(systemMessage);
   }
 
   async updateMemberRole(
@@ -454,28 +779,58 @@ export class ConversationsService {
           userId: targetUserId,
         },
       },
+      include: { user: { select: { displayName: true } } },
     });
     if (!target) throw new NotFoundException('Người này không phải thành viên');
     if (target.role === role) return;
 
-    await this.prisma.$transaction(async (tx) => {
-      if (target.role === MemberRole.ADMIN && role === MemberRole.MEMBER) {
-        const promoted = await this.promoteNextAdminIfNeeded(
+    const { mainMessage, promotedMessage } = await this.prisma.$transaction(
+      async (tx) => {
+        let promotedUserId: string | null = null;
+        let promotedDisplayName: string | null = null;
+        if (target.role === MemberRole.ADMIN && role === MemberRole.MEMBER) {
+          const result = await this.promoteNextAdminIfNeeded(
+            tx,
+            membership.conversationId,
+            targetUserId,
+          );
+          if (!result.canContinue) {
+            throw new ConflictException(
+              'Không thể giáng chức admin duy nhất khi nhóm không còn thành viên nào khác',
+            );
+          }
+          promotedUserId = result.promotedUserId;
+          promotedDisplayName = result.promotedDisplayName;
+        }
+        await tx.conversationMember.update({
+          where: { id: target.id },
+          data: { role },
+        });
+
+        const mainMessage = await this.createSystemMessage(
           tx,
           membership.conversationId,
-          targetUserId,
+          membership.userId,
+          role === MemberRole.ADMIN ? 'role_promoted' : 'role_demoted',
+          { targetId: targetUserId, targetName: target.user.displayName },
         );
-        if (!promoted) {
-          throw new ConflictException(
-            'Không thể giáng chức admin duy nhất khi nhóm không còn thành viên nào khác',
-          );
-        }
-      }
-      await tx.conversationMember.update({
-        where: { id: target.id },
-        data: { role },
-      });
-    });
+        // Chính sách "admin cuối cùng" tự thăng 1 người khác khi giáng chức
+        // chính admin cuối — phải báo riêng, không thì người xem chat chỉ
+        // thấy "giáng chức X" mà không biết ai vừa thành admin mới.
+        const promotedMessage = promotedUserId
+          ? await this.createSystemMessage(
+              tx,
+              membership.conversationId,
+              promotedUserId,
+              'role_promoted',
+              { targetId: promotedUserId, targetName: promotedDisplayName },
+            )
+          : null;
+        return { mainMessage, promotedMessage };
+      },
+    );
+    this.emitSystemMessage(mainMessage);
+    if (promotedMessage) this.emitSystemMessage(promotedMessage);
   }
 
   async setNickname(
@@ -490,28 +845,39 @@ export class ConversationsService {
           userId: targetUserId,
         },
       },
+      include: { user: { select: { displayName: true } } },
     });
     if (!target) throw new NotFoundException('Người này không phải thành viên');
 
-    await this.prisma.conversationNickname.upsert({
-      where: {
-        conversationId_targetUserId: {
+    const systemMessage = await this.prisma.$transaction(async (tx) => {
+      await tx.conversationNickname.upsert({
+        where: {
+          conversationId_targetUserId: {
+            conversationId: membership.conversationId,
+            targetUserId,
+          },
+        },
+        create: {
           conversationId: membership.conversationId,
           targetUserId,
+          nickname,
+          setById: membership.userId,
         },
-      },
-      create: {
-        conversationId: membership.conversationId,
-        targetUserId,
-        nickname,
-        setById: membership.userId,
-      },
-      update: { nickname, setById: membership.userId },
+        update: { nickname, setById: membership.userId },
+      });
+      return this.createSystemMessage(
+        tx,
+        membership.conversationId,
+        membership.userId,
+        'nickname_set',
+        { targetId: targetUserId, targetName: target.user.displayName, nickname },
+      );
     });
     this.events.emit('group.updated', {
       conversationId: membership.conversationId,
       changedFields: { nickname: { targetUserId, nickname } },
     });
+    this.emitSystemMessage(systemMessage);
     return { targetUserId, nickname };
   }
 
@@ -600,18 +966,29 @@ export class ConversationsService {
     }
 
     try {
-      const member = await this.prisma.conversationMember.create({
-        data: {
-          conversationId: link.conversationId,
-          userId,
-          role: MemberRole.MEMBER,
+      const { member, systemMessage } = await this.prisma.$transaction(
+        async (tx) => {
+          const created = await tx.conversationMember.create({
+            data: {
+              conversationId: link.conversationId,
+              userId,
+              role: MemberRole.MEMBER,
+            },
+            select: {
+              role: true,
+              joinedAt: true,
+              user: { select: publicUserSelect },
+            },
+          });
+          const systemMessage = await this.createSystemMessage(
+            tx,
+            link.conversationId,
+            userId,
+            'member_joined_via_link',
+          );
+          return { member: created, systemMessage };
         },
-        select: {
-          role: true,
-          joinedAt: true,
-          user: { select: publicUserSelect },
-        },
-      });
+      );
       this.events.emit('group.member.added', {
         conversationId: link.conversationId,
         member: {
@@ -623,6 +1000,7 @@ export class ConversationsService {
         // Tự join bằng link là hành động của chính mình -> không cần tự thông báo cho mình
         notify: false,
       });
+      this.emitSystemMessage(systemMessage);
     } catch (e) {
       // Đã là thành viên rồi -> coi như thành công, không báo lỗi, không emit lại
       if (!isUniqueViolation(e)) throw e;
@@ -673,6 +1051,46 @@ export class ConversationsService {
     }
   }
 
+  /** Trạng thái online chỉ dành cho bạn bè của viewer — người lạ (kể cả cùng
+   *  nhóm, hoặc đang chặn nhau) luôn vắng mặt trong map, tức là offline. Khớp
+   *  với presence:update vốn cũng chỉ gửi tới bạn bè. */
+  private async friendsOnlineMap(viewerId: string, userIds: string[]) {
+    const otherIds = userIds.filter((id) => id !== viewerId);
+    if (otherIds.length === 0) return new Map<string, boolean>();
+    const friendships = await this.prisma.friendship.findMany({
+      where: { OR: otherIds.map((id) => orderedPair(viewerId, id)) },
+      select: { userId1: true, userId2: true },
+    });
+    const friendIds = friendships.map((f) =>
+      f.userId1 === viewerId ? f.userId2 : f.userId1,
+    );
+    return this.presence.isOnlineBatch(friendIds);
+  }
+
+  // Cùng quy ước với gửi lời mời kết bạn: bị người kia chặn → 404 (giấu việc
+  // bị chặn), tự mình chặn người kia → 403 rõ ràng.
+  private async assertNotBlocked(userId: string, otherId: string) {
+    const blocks = await this.prisma.block.findMany({
+      where: {
+        OR: [
+          { blockerId: userId, blockedId: otherId },
+          { blockerId: otherId, blockedId: userId },
+        ],
+      },
+      select: { blockerId: true },
+    });
+    if (blocks.some((b) => b.blockerId === otherId)) {
+      throw new NotFoundException('Không tìm thấy người dùng');
+    }
+    if (blocks.length > 0) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: 'BLOCKED_BY_YOU',
+        message: 'Bạn đã chặn người này, hãy bỏ chặn trước khi nhắn tin',
+      });
+    }
+  }
+
   private async assertFriends(userId: string, otherId: string) {
     const friendship = await this.prisma.friendship.findUnique({
       where: { userId1_userId2: orderedPair(userId, otherId) },
@@ -687,12 +1105,19 @@ export class ConversationsService {
   }
 
   /** Nếu excludeUserId là admin duy nhất, tự thăng thành viên vào sớm nhất lên ADMIN.
-   *  Trả về false nếu không còn ai khác để thăng. */
+   *  `canContinue: false` nghĩa là không còn ai khác trong nhóm để thăng (gọi nơi
+   *  dùng phải tự xử lý — vd xóa hẳn nhóm). `promotedUserId` khác null khi có
+   *  người vừa được thăng, để nơi gọi tự phát tin hệ thống `role_promoted` cho
+   *  đúng người đó (phân biệt với trường hợp đã sẵn có admin khác, không cần thăng ai). */
   private async promoteNextAdminIfNeeded(
     tx: Prisma.TransactionClient,
     conversationId: string,
     excludeUserId: string,
-  ) {
+  ): Promise<{
+    canContinue: boolean;
+    promotedUserId: string | null;
+    promotedDisplayName: string | null;
+  }> {
     const remainingAdmins = await tx.conversationMember.count({
       where: {
         conversationId,
@@ -700,22 +1125,122 @@ export class ConversationsService {
         userId: { not: excludeUserId },
       },
     });
-    if (remainingAdmins > 0) return true;
+    if (remainingAdmins > 0) {
+      return { canContinue: true, promotedUserId: null, promotedDisplayName: null };
+    }
 
     // id phụ làm tiebreaker để kết quả ổn định khi joinedAt trùng (vd: tạo group,
     // nhiều thành viên join cùng lúc trong 1 lệnh)
     const next = await tx.conversationMember.findFirst({
       where: { conversationId, userId: { not: excludeUserId } },
       orderBy: [{ joinedAt: 'asc' }, { id: 'asc' }],
-      select: { id: true },
+      select: { userId: true, user: { select: { displayName: true } } },
     });
-    if (!next) return false;
+    if (!next) {
+      return { canContinue: false, promotedUserId: null, promotedDisplayName: null };
+    }
 
     await tx.conversationMember.update({
-      where: { id: next.id },
+      where: { conversationId_userId: { conversationId, userId: next.userId } },
       data: { role: MemberRole.ADMIN },
     });
-    return true;
+    return {
+      canContinue: true,
+      promotedUserId: next.userId,
+      promotedDisplayName: next.user.displayName,
+    };
+  }
+
+  /** Tạo 1 tin SYSTEM trong CÙNG transaction của hành động gốc + cập nhật
+   *  Conversation.lastMessageAt/lastMessageId giống tin nhắn thường (để nổi
+   *  lên đầu danh sách conversation). `senderId` = actor (người thực hiện
+   *  hành động) — tái dùng quan hệ `sender` có sẵn, không thêm cột riêng. */
+  private async createSystemMessage(
+    tx: Prisma.TransactionClient,
+    conversationId: string,
+    actorId: string,
+    event: string,
+    payload: Record<string, unknown> = {},
+  ) {
+    const content: SystemMessageContent = { event, actorId, ...payload };
+    const created = await tx.message.create({
+      data: {
+        conversationId,
+        senderId: actorId,
+        type: MessageType.SYSTEM,
+        content: JSON.stringify(content),
+      },
+      select: systemMessageSelect,
+    });
+    await tx.conversation.update({
+      where: { id: conversationId },
+      data: { lastMessageAt: created.createdAt, lastMessageId: created.id },
+    });
+    return created;
+  }
+
+  /** Broadcast tin SYSTEM vừa tạo giống hệt tin nhắn thường qua `message.created`
+   *  — ChatGateway không cần biết gì khác, `message:new` đã broadcast đúng cơ chế.
+   *  Gọi SAU KHI transaction tạo tin đã commit (không emit trong lúc còn transaction). */
+  private emitSystemMessage(
+    created: Awaited<ReturnType<typeof this.createSystemMessage>>,
+  ) {
+    this.events.emit('message.created', {
+      conversationId: created.conversationId,
+      message: {
+        id: created.id,
+        conversationId: created.conversationId,
+        sender: created.sender,
+        type: created.type,
+        content: created.content,
+        mediaUrl: null,
+        mediaPublicId: null,
+        mediaName: null,
+        mediaSize: null,
+        replyTo: null,
+        isRecalled: false,
+        recalledAt: null,
+        createdAt: created.createdAt,
+        reactions: [],
+      },
+    });
+  }
+
+  private parseSystemContent(content: string): SystemMessageContent {
+    return JSON.parse(content) as SystemMessageContent;
+  }
+
+  /** Dịch tin SYSTEM sang tiếng Việt cho preview trên conversation list — CHỈ
+   *  dùng `displayName` thuần (không tra nickname) vì list không có context
+   *  đầy đủ như trong chat; `MessageBubble` phía client tự dịch lại bằng
+   *  nickname thật khi hiện trong đúng đoạn chat. */
+  private translateSystemMessage(content: string, actorName: string): string {
+    const data = this.parseSystemContent(content);
+    const targetName = data.targetName;
+    switch (data.event) {
+      case 'member_added':
+        return `${actorName} đã thêm ${targetName} vào nhóm`;
+      case 'member_joined_via_link':
+        return `${actorName} đã tham gia nhóm qua link mời`;
+      case 'member_left':
+        return `${actorName} đã rời nhóm`;
+      case 'member_removed':
+        return `${actorName} đã xoá ${targetName} khỏi nhóm`;
+      case 'role_promoted':
+        return `${actorName} đã bổ nhiệm ${targetName} làm quản trị viên`;
+      case 'role_demoted':
+        return `${actorName} đã gỡ quyền quản trị viên của ${targetName}`;
+      case 'name_changed':
+        return `${actorName} đã đổi tên nhóm thành "${data.newName}"`;
+      case 'avatar_changed':
+        return `${actorName} đã đổi ảnh đại diện nhóm`;
+      case 'background_changed':
+        return `${actorName} đã đổi hình nền đoạn chat`;
+      case 'nickname_set':
+        return `${actorName} đã đặt biệt danh cho ${targetName} là "${data.nickname}"`;
+      default:
+        return '';
+    }
   }
 
   private toSummary(
@@ -732,6 +1257,8 @@ export class ConversationsService {
         content: string | null;
         isRecalled: boolean;
         senderId: string;
+        sender: { displayName: string };
+        call: { type: CallType; status: CallStatus } | null;
       } | null;
       members: Array<{
         userId: string;
@@ -752,8 +1279,10 @@ export class ConversationsService {
     const me = conv.members.find((m) => m.userId === viewerId);
     // Không đếm số tin chưa đọc chính xác (tốn 1 query COUNT/conversation) — chỉ
     // cần biết CÓ tin chưa đọc hay không, giống cách lastReadMessageId đã đơn giản hoá.
+    // Tin cuối do chính người xem gửi thì không bao giờ là "chưa đọc" với họ.
     const unread =
       conv.lastMessage !== null &&
+      conv.lastMessage.senderId !== viewerId &&
       conv.lastMessage.id !== me?.lastReadMessageId;
     const lastMessage = conv.lastMessage && {
       id: conv.lastMessage.id,
@@ -761,6 +1290,15 @@ export class ConversationsService {
       content: conv.lastMessage.isRecalled ? null : conv.lastMessage.content,
       isRecalled: conv.lastMessage.isRecalled,
       senderId: conv.lastMessage.senderId,
+      previewText:
+        conv.lastMessage.type === MessageType.SYSTEM
+          ? this.translateSystemMessage(
+              conv.lastMessage.content!,
+              conv.lastMessage.sender.displayName,
+            )
+          : conv.lastMessage.type === MessageType.CALL && conv.lastMessage.call
+            ? callPreviewText(conv.lastMessage.call)
+            : null,
     };
 
     if (conv.type === ConversationType.GROUP) {

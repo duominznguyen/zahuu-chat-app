@@ -2,6 +2,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useRef,
   useState,
   type ReactNode,
@@ -19,6 +20,14 @@ export function useToast() {
   const ctx = useContext(ToastContext);
   if (!ctx) throw new Error("useToast phải gọi trong ToastProvider");
   return ctx;
+}
+
+let showFromOutside: ((message: string) => void) | null = null;
+
+// Cho code không phải React (vd điều phối cuộc gọi) hiện toast — không gọi
+// được hook useToast() ở đó.
+export function showToast(message: string) {
+  showFromOutside?.(message);
 }
 
 export function ToastProvider({ children }: { children: ReactNode }) {
@@ -46,6 +55,13 @@ export function ToastProvider({ children }: { children: ReactNode }) {
     },
     [opacity],
   );
+
+  useEffect(() => {
+    showFromOutside = show;
+    return () => {
+      showFromOutside = null;
+    };
+  }, [show]);
 
   return (
     <ToastContext.Provider value={{ show }}>

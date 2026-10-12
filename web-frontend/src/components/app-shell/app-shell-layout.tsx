@@ -1,5 +1,6 @@
 import { ArrowLeft } from "lucide-react";
 import { Link, Outlet, useLocation } from "react-router-dom";
+import { WebPushPrompt } from "@/components/web-push-prompt";
 import { useIsDesktop } from "@/lib/use-media-query";
 import { ListPane } from "./list-pane";
 import { Rail } from "./rail";
@@ -12,7 +13,7 @@ function useHasMainSelection() {
   return /^\/(chat|friends)\/.+/.test(location.pathname);
 }
 
-export function AppShellLayout() {
+function AppShellContent() {
   const isDesktop = useIsDesktop();
   const hasMainSelection = useHasMainSelection();
   const location = useLocation();
@@ -53,5 +54,14 @@ export function AppShellLayout() {
         <Outlet />
       </main>
     </div>
+  );
+}
+
+export function AppShellLayout() {
+  return (
+    <>
+      <AppShellContent />
+      <WebPushPrompt />
+    </>
   );
 }

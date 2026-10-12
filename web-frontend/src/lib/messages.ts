@@ -1,7 +1,15 @@
 import { apiClient } from "./api-client";
+import type { CallSummary } from "./calls";
 import type { PublicUser } from "./friends";
 
-export type MessageType = "TEXT" | "IMAGE" | "VIDEO" | "FILE" | "STICKER";
+export type MessageType =
+  | "TEXT"
+  | "IMAGE"
+  | "VIDEO"
+  | "FILE"
+  | "STICKER"
+  | "SYSTEM"
+  | "CALL";
 export type ReactionType = "like" | "love" | "haha" | "wow" | "sad" | "angry";
 
 export interface ReplyToPreview {
@@ -9,6 +17,8 @@ export interface ReplyToPreview {
   senderId: string;
   type: MessageType;
   content: string | null;
+  mediaUrl: string | null;
+  mediaName: string | null;
   isRecalled: boolean;
 }
 
@@ -23,6 +33,7 @@ export interface Message {
   mediaName: string | null;
   mediaSize: number | null;
   replyTo: ReplyToPreview | null;
+  call: CallSummary | null;
   isRecalled: boolean;
   recalledAt: string | null;
   createdAt: string;
@@ -47,6 +58,29 @@ export function sendTextMessage(conversationId: string, content: string, replyTo
   });
 }
 
+interface SendMediaOptions {
+  mediaName?: string;
+  mediaSize?: number;
+  replyToId?: string;
+}
+
+export function sendMediaMessage(
+  conversationId: string,
+  type: "IMAGE" | "VIDEO" | "FILE",
+  mediaUrl: string,
+  mediaPublicId: string,
+  options?: SendMediaOptions,
+) {
+  return apiClient.post<Message>(`/conversations/${conversationId}/messages`, {
+    type,
+    mediaUrl,
+    mediaPublicId,
+    mediaName: options?.mediaName,
+    mediaSize: options?.mediaSize,
+    replyToId: options?.replyToId,
+  });
+}
+
 export function recallMessage(messageId: string) {
   return apiClient.patch(`/messages/${messageId}/recall`);
 }
@@ -65,4 +99,36 @@ export function removeReaction(messageId: string) {
 
 export function markRead(conversationId: string, lastReadMessageId: string) {
   return apiClient.patch(`/conversations/${conversationId}/read`, { lastReadMessageId });
+}
+
+export interface SearchHit {
+  id: string;
+  content: string | null;
+  createdAt: string;
+  sender: PublicUser;
+}
+
+export interface SearchPage {
+  items: SearchHit[];
+  nextCursor: string | null;
+}
+
+export function searchMessages(conversationId: string, q: string, cursor?: string) {
+  const params = new URLSearchParams({ q });
+  if (cursor) params.set("cursor", cursor);
+  return apiClient.get<SearchPage>(`/conversations/${conversationId}/messages/search?${params}`);
+}
+
+export function listMediaMessages(conversationId: string, kind: "MEDIA" | "FILE", cursor?: string) {
+  const params = new URLSearchParams({ kind });
+  if (cursor) params.set("cursor", cursor);
+  return apiClient.get<MessagesPage>(`/conversations/${conversationId}/media?${params}`);
+}
+
+export interface AroundPage extends MessagesPage {
+  hasNewer: boolean;
+}
+
+export function getMessagesAround(conversationId: string, messageId: string) {
+  return apiClient.get<AroundPage>(`/conversations/${conversationId}/messages/around?messageId=${messageId}`);
 }

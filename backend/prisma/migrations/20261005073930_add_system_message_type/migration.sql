@@ -1,0 +1,2 @@
+-- AlterTable
+ALTER TABLE `Message` MODIFY `type` ENUM('TEXT', 'IMAGE', 'VIDEO', 'FILE', 'STICKER', 'SYSTEM') NOT NULL;

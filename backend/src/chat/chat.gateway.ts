@@ -42,6 +42,9 @@ interface FriendAcceptedEvent {
   userId: string;
   otherUserId: string;
 }
+interface RelationshipChangedEvent {
+  userIds: [string, string];
+}
 interface GroupMemberAddedEvent {
   conversationId: string;
   member: { id: string } & Record<string, unknown>;
@@ -51,6 +54,24 @@ interface GroupMemberAddedEvent {
   // không phải "được thêm vào" theo nghĩa cần báo), nên client cần cờ này để biết có
   // nên tăng badge chuông hay không, không thể tự suy ra chỉ từ addedById.
   notify: boolean;
+}
+interface CallStartedEvent {
+  callId: string;
+  conversationId: string;
+  type: string;
+  conversationType: string;
+  startedById: string;
+  startedBy: unknown;
+}
+interface CallParticipantEvent {
+  callId: string;
+  conversationId: string;
+  userId: string;
+}
+interface CallEndedEvent {
+  callId: string;
+  conversationId: string;
+  status: string;
 }
 interface GroupMemberRemovedEvent {
   conversationId: string;
@@ -238,6 +259,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       .emit('friend:accepted', { userId: otherUserId });
   }
 
+  // Payload chỉ có id người còn lại, không nói loại thay đổi — người bị chặn
+  // không cần biết mình bị chặn, client chỉ dùng để tải lại trạng thái.
+  @OnEvent('relationship.changed')
+  onRelationshipChanged({ userIds: [userA, userB] }: RelationshipChangedEvent) {
+    this.server
+      .to(userRoom(userA))
+      .emit('relationship:changed', { userId: userB });
+    this.server
+      .to(userRoom(userB))
+      .emit('relationship:changed', { userId: userA });
+  }
+
   @OnEvent('group.member.added')
   async onGroupMemberAdded({
     conversationId,
@@ -275,6 +308,37 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.server
       .to(conversationRoom(conversationId))
       .emit('group:updated', { conversationId, ...changedFields });
+  }
+
+  // Người gọi đã ở trong room rồi nên loại trừ theo userRoom (mọi socket của họ),
+  // tránh họ nhận chính cuộc gọi của mình như cuộc gọi đến.
+  @OnEvent('call.started')
+  onCallStarted({ callId, conversationId, type, conversationType, startedById, startedBy }: CallStartedEvent) {
+    this.server
+      .to(conversationRoom(conversationId))
+      .except(userRoom(startedById))
+      .emit('call:incoming', { callId, conversationId, type, conversationType, startedBy });
+  }
+
+  @OnEvent('call.participantJoined')
+  onCallParticipantJoined({ callId, conversationId, userId }: CallParticipantEvent) {
+    this.server
+      .to(conversationRoom(conversationId))
+      .emit('call:participantJoined', { callId, conversationId, userId });
+  }
+
+  @OnEvent('call.participantLeft')
+  onCallParticipantLeft({ callId, conversationId, userId }: CallParticipantEvent) {
+    this.server
+      .to(conversationRoom(conversationId))
+      .emit('call:participantLeft', { callId, conversationId, userId });
+  }
+
+  @OnEvent('call.ended')
+  onCallEnded({ callId, conversationId, status }: CallEndedEvent) {
+    this.server
+      .to(conversationRoom(conversationId))
+      .emit('call:ended', { callId, conversationId, status });
   }
 
   private async relayTyping(

@@ -1,4 +1,5 @@
 import { useAuthStore } from "@/store/auth-store";
+import { resetLastTabPaths } from "./last-tab-path";
 import { queryClient } from "./query-client";
 import { stopRefreshTimer } from "./token-refresh";
 
@@ -11,5 +12,7 @@ import { stopRefreshTimer } from "./token-refresh";
 export function clearSession() {
   stopRefreshTimer();
   queryClient.clear();
+  // Đoạn chat đang mở của tài khoản cũ sẽ 404 với tài khoản đăng nhập sau.
+  resetLastTabPaths();
   useAuthStore.getState().clear();
 }

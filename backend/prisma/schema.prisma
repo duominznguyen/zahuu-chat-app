@@ -53,6 +53,9 @@ model User {
   messageReactions MessageReaction[]
   messageDeletions MessageDeletion[]
 
+  callsStarted       Call[]
+  callParticipations CallParticipant[]
+
   createdInviteLinks GroupInviteLink[]
 
   notificationsReceived Notification[] @relation("NotificationRecipient")
@@ -225,6 +228,7 @@ model Conversation {
 
   members       ConversationMember[]
   messages      Message[]
+  calls         Call[]
   nicknames     ConversationNickname[]
   inviteLinks   GroupInviteLink[]
   notifications Notification[]
@@ -319,6 +323,9 @@ model Message {
   // là "tin cuối" của đúng 1 conversation (conversationId của nó) nên @unique ở trên là đúng
   lastMessageFor Conversation?     @relation("ConversationLastMessage")
 
+  callId String? @unique
+  call   Call?   @relation(fields: [callId], references: [id])
+
   @@index([conversationId, createdAt]) // cursor-based pagination
 }
 
@@ -328,6 +335,58 @@ enum MessageType {
   VIDEO
   FILE
   STICKER
+  SYSTEM // sự kiện nhóm (thêm/xoá thành viên, đổi tên...), không phải tin nhắn thật
+  CALL // lịch sử cuộc gọi, tạo 1 lần khi cuộc gọi kết thúc hẳn
+}
+
+model Call {
+  id                   String     @id @default(uuid())
+  conversationId       String
+  // Chỉ có giá trị khi RINGING/ONGOING, set null cùng transaction khi kết thúc —
+  // @unique ở tầng DB chặn 2 cuộc gọi đang hoạt động cho cùng 1 conversation
+  // (MySQL cho phép nhiều NULL trong unique index nên các cuộc gọi đã kết thúc không xung đột).
+  activeConversationId String?    @unique
+  startedById          String
+  type                 CallType
+  status               CallStatus @default(RINGING)
+  livekitRoomName      String     @unique
+  startedAt            DateTime   @default(now())
+  endedAt              DateTime?
+
+  conversation Conversation      @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  startedBy    User              @relation(fields: [startedById], references: [id])
+  participants CallParticipant[]
+  // 1 cuộc gọi sinh đúng 1 tin CALL, tạo khi cuộc gọi kết thúc (cùng pattern lastMessageId)
+  message      Message?
+
+  @@index([conversationId])
+}
+
+enum CallType {
+  AUDIO
+  VIDEO
+}
+
+enum CallStatus {
+  RINGING
+  ONGOING
+  ENDED
+  MISSED
+  DECLINED
+}
+
+model CallParticipant {
+  id       String    @id @default(uuid())
+  callId   String
+  userId   String
+  // null = được mời nhưng chưa bắt máy (joinedAt null + leftAt set nghĩa là đã từ chối)
+  joinedAt DateTime?
+  leftAt   DateTime?
+
+  call Call @relation(fields: [callId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([callId, userId])
 }
 
 model MessageReaction {
