@@ -76,6 +76,28 @@ export interface ConversationDetail {
 
 export const DIRECT_BLOCKED_MESSAGE = "Hiện không thể liên lạc với người này";
 
+export interface ConversationSearchResult {
+  groups: {
+    id: string;
+    name: string | null;
+    avatarUrl: string | null;
+    memberCount: number;
+  }[];
+  // Chat 1-1 ĐÃ CÓ TIN với người CHƯA là bạn — bạn bè tìm qua searchFriendsByName.
+  directs: {
+    id: string;
+    name: string;
+    avatarUrl: string | null;
+    otherUser: { id: string; username: string };
+  }[];
+}
+
+export function searchConversations(q: string) {
+  return apiClient.get<ConversationSearchResult>(
+    `/conversations/search?q=${encodeURIComponent(q)}`,
+  );
+}
+
 export function getConversationDetail(id: string) {
   return apiClient.get<ConversationDetail>(`/conversations/${id}`);
 }

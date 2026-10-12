@@ -22,7 +22,11 @@ export function SeenByRow({ seenBy }: { seenBy: SeenBy }) {
           className="rounded-full border-2 border-white dark:border-zinc-950"
           style={index > 0 ? { marginLeft: -6 } : undefined}
         >
-          <Avatar name={user.displayName} uri={user.avatarUrl} size={AVATAR_SIZE} />
+          <Avatar
+            name={user.displayName}
+            uri={user.avatarUrl}
+            size={AVATAR_SIZE}
+          />
         </View>
       ))}
       {hiddenCount > 0 && (

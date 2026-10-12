@@ -5,11 +5,19 @@ import {
   useQuery,
   useQueryClient,
 } from "@tanstack/react-query";
-import { useRouter } from "expo-router";
-import { useEffect, useState } from "react";
-import { FlatList, Pressable, Text, View } from "react-native";
+import { useFocusEffect, useRouter } from "expo-router";
+import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  BackHandler,
+  FlatList,
+  Pressable,
+  Text,
+  TextInput,
+  View,
+} from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 
+import { ConversationSearchResults } from "@/components/chat/conversation-search-results";
 import {
   ActionSheet,
   Avatar,
@@ -173,34 +181,105 @@ export default function ChatsTab() {
 
   const items = query.data?.pages.flatMap((p) => p.items) ?? [];
 
+  // Chế độ tìm kiếm chỉ thoát qua nút Hủy/nút Back/chọn kết quả, không thoát
+  // khi ô nhập mất focus — kéo danh sách kết quả cũng làm mất focus (ẩn bàn phím).
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const searchInputRef = useRef<TextInput>(null);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearchText("");
+    searchInputRef.current?.blur();
+  }, []);
+
+  // Chỉ chặn nút Back khi tab đang hiển thị — màn khác đè lên trên (vd Thông
+  // báo) thì Back phải về màn trước như bình thường.
+  useFocusEffect(
+    useCallback(() => {
+      if (!searchOpen) return;
+      const sub = BackHandler.addEventListener("hardwareBackPress", () => {
+        closeSearch();
+        return true;
+      });
+      return () => sub.remove();
+    }, [searchOpen, closeSearch]),
+  );
+
   return (
     <SafeAreaView edges={["top"]} className="flex-1 bg-white dark:bg-zinc-950">
-      <View className="flex-row items-center justify-between border-b border-zinc-200 px-4 py-4 dark:border-zinc-800">
-        <Text className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
-          Tin nhắn
-        </Text>
-        <View className="flex-row items-center gap-4">
-          <Pressable onPress={() => router.push("/notifications")}>
-            <View>
-              <Ionicons
-                name="notifications-outline"
-                size={26}
-                color="#71717a"
-              />
-              {!!unreadCountQuery.data && (
-                <View className="absolute -right-1.5 -top-1.5">
-                  <Badge count={unreadCountQuery.data} />
-                </View>
-              )}
-            </View>
-          </Pressable>
-          <Pressable onPress={() => setNewChatSheetOpen(true)}>
-            <Ionicons name="add-circle-outline" size={28} color="#71717a" />
-          </Pressable>
+      <View className="border-b border-zinc-200 dark:border-zinc-800">
+        <View className="flex-row items-center justify-between px-4 pb-2 pt-4">
+          <Text className="text-2xl font-bold text-zinc-900 dark:text-zinc-100">
+            Tin nhắn
+          </Text>
+          <View className="flex-row items-center gap-4">
+            <Pressable
+              accessibilityLabel="Thông báo"
+              onPress={() => router.push("/notifications")}
+            >
+              <View>
+                <Ionicons
+                  name="notifications-outline"
+                  size={26}
+                  color="#71717a"
+                />
+                {!!unreadCountQuery.data && (
+                  <View className="absolute -right-1.5 -top-1.5">
+                    <Badge count={unreadCountQuery.data} />
+                  </View>
+                )}
+              </View>
+            </Pressable>
+            <Pressable
+              accessibilityLabel="Nhắn tin mới hoặc tạo nhóm"
+              onPress={() => setNewChatSheetOpen(true)}
+            >
+              <Ionicons name="add-circle-outline" size={28} color="#71717a" />
+            </Pressable>
+          </View>
+        </View>
+        <View className="flex-row items-center gap-2 px-4 pb-3">
+          <View className="h-10 flex-1 flex-row items-center gap-2 rounded-xl bg-zinc-100 px-3 dark:bg-zinc-800">
+            <Ionicons name="search" size={18} color="#a1a1aa" />
+            <TextInput
+              ref={searchInputRef}
+              value={searchText}
+              onChangeText={setSearchText}
+              onFocus={() => setSearchOpen(true)}
+              placeholder="Tìm bạn bè, nhóm hoặc @username"
+              placeholderTextColor="#a1a1aa"
+              accessibilityLabel="Tìm kiếm đoạn chat"
+              autoCapitalize="none"
+              autoCorrect={false}
+              returnKeyType="search"
+              className="flex-1 text-base text-zinc-900 dark:text-zinc-100"
+            />
+            {searchText.length > 0 && (
+              <Pressable
+                accessibilityLabel="Xoá nội dung tìm kiếm"
+                onPress={() => setSearchText("")}
+                hitSlop={8}
+              >
+                <Ionicons name="close-circle" size={18} color="#a1a1aa" />
+              </Pressable>
+            )}
+          </View>
+          {searchOpen && (
+            <Pressable onPress={closeSearch} hitSlop={8}>
+              <Text className="text-base font-medium text-primary dark:text-primary-dark">
+                Hủy
+              </Text>
+            </Pressable>
+          )}
         </View>
       </View>
 
-      {query.isLoading ? null : query.isError ? (
+      {searchOpen ? (
+        <ConversationSearchResults
+          searchText={searchText}
+          onPicked={closeSearch}
+        />
+      ) : query.isLoading ? null : query.isError ? (
         <ErrorState onRetry={() => query.refetch()} />
       ) : items.length === 0 ? (
         <EmptyState title="Chưa có cuộc trò chuyện nào" />
