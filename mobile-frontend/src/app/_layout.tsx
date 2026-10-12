@@ -11,9 +11,14 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { ToastProvider } from "@/components/ui/toast";
 import { bootstrapAuth } from "@/lib/auth";
 import { queryClient } from "@/lib/query-client";
+import { loadThemePreference } from "@/lib/theme";
 import { useAuthStore } from "@/store/auth-store";
 
 SplashScreen.preventAutoHideAsync();
+// Gọi ngay lúc nạp module (không chờ effect) — đọc SecureStore xong gần như
+// luôn trước khi splash ẩn (splash còn chờ bootstrapAuth gọi mạng), tránh
+// nháy theme hệ thống rồi mới đổi sang theme người dùng đã chọn.
+void loadThemePreference();
 
 export default function RootLayout() {
   const colorScheme = useColorScheme();
