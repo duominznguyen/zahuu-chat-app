@@ -7,7 +7,14 @@ import { SafeAreaView } from "react-native-safe-area-context";
 
 import { Avatar, ErrorState, ListRow } from "@/components/ui";
 import { logout } from "@/lib/auth";
+import { useThemeStore, type ThemePreference } from "@/lib/theme";
 import { getMe } from "@/lib/users";
+
+const THEME_LABEL: Record<ThemePreference, string> = {
+  light: "Sáng",
+  dark: "Tối",
+  system: "Theo hệ thống",
+};
 
 function MenuIcon({ name }: { name: keyof typeof Ionicons.glyphMap }) {
   return <Ionicons name={name} size={22} color="#71717a" />;
@@ -21,6 +28,7 @@ export default function MeTab() {
   const router = useRouter();
   const query = useQuery({ queryKey: ["users", "me"], queryFn: getMe });
   const me = query.data;
+  const themePreference = useThemeStore((s) => s.preference);
 
   return (
     <SafeAreaView edges={["top"]} className="flex-1 bg-white dark:bg-zinc-950">
@@ -80,6 +88,13 @@ export default function MeTab() {
                   me?.hasPassword ? "/change-password" : "/set-password",
                 )
               }
+            />
+            <ListRow
+              leading={<MenuIcon name="contrast-outline" />}
+              title="Giao diện"
+              subtitle={THEME_LABEL[themePreference]}
+              trailing={<Chevron />}
+              onPress={() => router.push("/appearance")}
             />
             <ListRow
               leading={<MenuIcon name="ban-outline" />}

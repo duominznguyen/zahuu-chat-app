@@ -14,6 +14,13 @@ export class ApiError extends Error {
   }
 }
 
+// Mã lỗi nghiệp vụ backend gửi kèm (vd "DIRECT_BLOCKED") — message thì dùng để
+// hiển thị, còn code mới ổn định để rẽ nhánh xử lý.
+export function errorCodeOf(err: unknown): string | undefined {
+  if (!(err instanceof ApiError)) return undefined;
+  return (err.body as { code?: string } | undefined)?.code;
+}
+
 function safeParseJson(text: string): unknown {
   try {
     return JSON.parse(text);

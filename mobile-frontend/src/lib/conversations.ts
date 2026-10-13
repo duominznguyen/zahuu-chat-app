@@ -49,6 +49,14 @@ export interface ConversationMember extends PublicUser {
   isOnline: boolean;
 }
 
+// Người đã xem tin neo (tin mới nhất viewer còn thấy) — `users` tối đa 5,
+// `count` là tổng số người đã xem để hiện "+N".
+export interface SeenBy {
+  messageId: string;
+  users: PublicUser[];
+  count: number;
+}
+
 export interface ConversationDetail {
   id: string;
   type: ConversationType;
@@ -61,6 +69,33 @@ export interface ConversationDetail {
   members: ConversationMember[];
   // Cuộc gọi đang đổ chuông/diễn ra, để hiện banner "Tham gia" trên header.
   activeCall: ActiveCallInfo | null;
+  // false khi là DIRECT và 2 người đang chặn nhau (không nói ai chặn ai).
+  canMessage: boolean;
+  seenBy: SeenBy | null;
+}
+
+export const DIRECT_BLOCKED_MESSAGE = "Hiện không thể liên lạc với người này";
+
+export interface ConversationSearchResult {
+  groups: {
+    id: string;
+    name: string | null;
+    avatarUrl: string | null;
+    memberCount: number;
+  }[];
+  // Chat 1-1 ĐÃ CÓ TIN với người CHƯA là bạn — bạn bè tìm qua searchFriendsByName.
+  directs: {
+    id: string;
+    name: string;
+    avatarUrl: string | null;
+    otherUser: { id: string; username: string };
+  }[];
+}
+
+export function searchConversations(q: string) {
+  return apiClient.get<ConversationSearchResult>(
+    `/conversations/search?q=${encodeURIComponent(q)}`,
+  );
 }
 
 export function getConversationDetail(id: string) {

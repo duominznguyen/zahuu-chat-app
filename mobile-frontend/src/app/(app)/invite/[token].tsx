@@ -7,9 +7,9 @@ import { Avatar, Button, ErrorState, useToast } from "@/components/ui";
 import { ApiError } from "@/lib/api-client";
 import { joinByInviteToken, previewInviteLink } from "@/lib/conversations";
 
-// Màn xem trước nhóm trước khi join (xử lý deep link zahuu://invite/<token>,
-// tạo ở InviteLink) — không join thẳng ngay khi mở link như trước, phải xác
-// nhận giống Zalo: tự ý thêm người vào nhóm mà không hỏi là trải nghiệm xấu.
+// Màn xem trước nhóm trước khi join (mở từ link mời trong chat, hoặc deep link
+// zahuu://invite/<token>) — không join thẳng ngay khi mở link, phải xác nhận
+// giống Zalo: tự ý thêm người vào nhóm mà không hỏi là trải nghiệm xấu.
 export default function JoinByInvite() {
   const { token, from } = useLocalSearchParams<{
     token: string;

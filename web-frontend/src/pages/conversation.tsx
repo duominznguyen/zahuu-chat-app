@@ -1,7 +1,7 @@
 import type { InfiniteData } from "@tanstack/react-query";
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Info, MessageCircle, Phone, Video, X } from "lucide-react";
-import { Fragment, useEffect, useRef, useState, type DragEvent } from "react";
+import { Fragment, useEffect, useLayoutEffect, useRef, useState, type DragEvent } from "react";
 import { useLocation, useNavigate, useParams } from "react-router-dom";
 import { rootBackground } from "@/lib/background-location";
 import { toast } from "sonner";
@@ -25,6 +25,7 @@ import {
   deleteMessageForMe,
   getMessagesAround,
   listMessages,
+  listMessagesAfter,
   markRead,
   recallMessage,
   removeReaction,
@@ -42,7 +43,10 @@ import { useAuthStore } from "@/store/auth-store";
 import { useUploadStore } from "@/store/upload-store";
 import { errorCode } from "@/lib/users";
 
-type MessagesCache = InfiniteData<MessagesPage, string | undefined>;
+// `cursor` = trang tin cũ hơn, `after` = trang tin mới hơn, `around` = cửa sổ quanh 1 tin
+// (nhảy tới tin).
+type MessagesPageParam = { cursor?: string; after?: string; around?: string };
+type MessagesCache = InfiniteData<MessagesPage, MessagesPageParam>;
 
 function patchMessage(
   data: MessagesCache | undefined,
@@ -97,7 +101,7 @@ function removeMessageFromCache(
 
 function prependMessage(data: MessagesCache | undefined, message: Message): MessagesCache | undefined {
   if (!data || data.pages.length === 0) {
-    return { pages: [{ items: [message], nextCursor: null }], pageParams: [undefined] };
+    return { pages: [{ items: [message], nextCursor: null }], pageParams: [{}] };
   }
   // Chặn trùng id — tin tới 2 lần (vd StrictMode / nhiều listener) không chèn
   // trùng, tránh key trùng trong list.
@@ -148,58 +152,14 @@ export default function Conversation() {
   const [infoOpen, setInfoOpen] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const [highlightedId, setHighlightedId] = useState<string | null>(null);
-  // Id hội thoại đang hiển thị cửa sổ "nhảy tới tin cũ" (chưa có tin mới hơn trong cache).
-  const [newerWindowFor, setNewerWindowFor] = useState<string | null>(null);
-  const hasNewerWindow = newerWindowFor === id;
-  const newerWindowRef = useRef(false);
-  useEffect(() => {
-    newerWindowRef.current = hasNewerWindow;
-  }, [hasNewerWindow]);
-  // Gửi tin hoặc đính kèm file khi đang xem tin cũ: quay về tin mới nhất trước, nếu không
-  // tin vừa gửi (đến qua socket) sẽ bị bỏ qua và người dùng không thấy đâu.
-  const returnToLatest = async () => {
-    if (!newerWindowRef.current) return;
-    setNewerWindowFor(null);
-    await queryClient.resetQueries({ queryKey: ["messages", id] });
-  };
+  // Tắt tạm việc tải tin mới hơn trong lúc nhảy tới 1 tin — xem handleJumpToMessage.
+  const [suppressNewer, setSuppressNewer] = useState(false);
   const [typingUserIds, setTypingUserIds] = useState<string[]>([]);
   const dragCounter = useRef(0);
   const lastMarkedReadId = useRef<string | null>(null);
   const typingTimeouts = useRef<Map<string, ReturnType<typeof setTimeout>>>(new Map());
+  const listRef = useRef<HTMLDivElement>(null);
   const upload = useUploadStore((s) => s.uploads[id]);
-
-  // Bấm vào quote "Trả lời" trong 1 bubble -> cuộn tới đúng tin gốc + flash
-  // highlight ngắn. Chỉ hoạt động trong phạm vi tin ĐÃ TẢI (DOM phải có sẵn
-  // phần tử #message-<id>) — tin gốc nằm ở trang cũ hơn chưa cuộn tới thì bỏ
-  // qua lặng lẽ, không tự động fetch thêm (giới hạn chấp nhận được cho MVP,
-  // giống cách MediaViewer không tự fetch thêm khi chạm biên trang đã tải).
-  // Dùng cho cả nút "Trả lời" lẫn kết quả tìm kiếm: nếu tin chưa tải thì tải thêm
-  // trang cũ hơn cho tới khi thấy (kết quả tìm kiếm có thể nằm rất xa).
-  const handleJumpToMessage = async (messageId: string) => {
-    if (!document.getElementById(`message-${messageId}`)) {
-      // Tin ngoài phạm vi đã tải: lấy cả cửa sổ quanh tin đó trong 1 request và thay cache
-      // bằng cửa sổ này — thời gian không phụ thuộc tin cách đây bao xa.
-      try {
-        const around = await getMessagesAround(id, messageId);
-        queryClient.setQueryData<InfiniteData<MessagesPage>>(["messages", id], {
-          pages: [{ items: around.items, nextCursor: around.nextCursor }],
-          pageParams: [undefined],
-        });
-        setNewerWindowFor(around.hasNewer ? id : null);
-      } catch {
-        toast.info("Không tìm thấy tin nhắn trong đoạn chat");
-        return;
-      }
-    }
-    await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 50)));
-    const el = document.getElementById(`message-${messageId}`);
-    if (!el) return;
-    el.scrollIntoView({ behavior: "smooth", block: "center" });
-    setHighlightedId(messageId);
-    window.setTimeout(() => {
-      setHighlightedId((current) => (current === messageId ? null : current));
-    }, 1500);
-  };
 
   const detailQuery = useQuery({
     queryKey: ["conversations", "detail", id],
@@ -217,17 +177,120 @@ export default function Conversation() {
     }
   }, [detailQuery.error, navigate]);
 
+  // Phân trang 2 chiều: trang sau (fetchNextPage, cuộn lên) là tin CŨ hơn, trang
+  // trước (fetchPreviousPage, cuộn xuống) là tin MỚI hơn — chỉ có khi đang ở
+  // cửa sổ tin cũ sau khi nhảy tới 1 tin.
   const messagesQuery = useInfiniteQuery({
     queryKey: ["messages", id],
-    queryFn: ({ pageParam }: { pageParam?: string }) => listMessages(id, pageParam),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    queryFn: ({ pageParam }: { pageParam: MessagesPageParam }) => {
+      if (pageParam.around) return getMessagesAround(id, pageParam.around);
+      if (pageParam.after) return listMessagesAfter(id, pageParam.after);
+      return listMessages(id, pageParam.cursor);
+    },
+    initialPageParam: {} as MessagesPageParam,
+    getNextPageParam: (lastPage): MessagesPageParam | undefined =>
+      lastPage.nextCursor ? { cursor: lastPage.nextCursor } : undefined,
+    getPreviousPageParam: (firstPage): MessagesPageParam | undefined =>
+      firstPage.hasNewer && firstPage.items[0] ? { after: firstPage.items[0].id } : undefined,
     // Khi mở hội thoại không ở trong room, socket có thể đã bỏ lỡ tin mới — cache cũ
     // sẽ khiến "đánh dấu đã đọc" gửi ID tin cũ. Luôn lấy mới để đánh dấu đúng tin mới nhất.
     staleTime: 0,
   });
 
   const messages = messagesQuery.data?.pages.flatMap((p) => p.items) ?? [];
+
+  // Cửa sổ "tin cũ" sau khi nhảy tới 1 tin ngoài phần đã tải: cache chưa có tới tin mới
+  // nhất. Suy thẳng từ trang đầu (mới nhất) đang có — cuộn xuống tải hết phần tin mới
+  // hơn thì tự hết, không cần state riêng.
+  const hasNewerWindow = !!messagesQuery.data?.pages[0]?.hasNewer;
+  // Handler socket đăng ký 1 lần nên phải đọc giá trị mới nhất qua ref.
+  const newerWindowRef = useRef(false);
+  useEffect(() => {
+    newerWindowRef.current = hasNewerWindow;
+  }, [hasNewerWindow]);
+
+  // Rời hội thoại khi đang ở cửa sổ tin cũ (đổi sang chat khác hoặc unmount): bỏ cache để
+  // lần mở sau bắt đầu từ tin mới nhất — cửa sổ được lưu làm tham số trang (để refetch lúc
+  // ĐANG xem giữ đúng chỗ) nên nếu giữ cache, mở lại sẽ tải lại đúng cửa sổ tin cũ đó.
+  useEffect(
+    () => () => {
+      if (newerWindowRef.current) {
+        queryClient.removeQueries({ queryKey: ["messages", id], exact: true });
+      }
+    },
+    [id, queryClient],
+  );
+
+  // Trang tin mới hơn được chèn vào ĐÁY khung flex-col-reverse — trình duyệt giữ nguyên
+  // scrollTop (tính từ đáy) nên nội dung đang xem bị đẩy lên đúng bằng chiều cao trang
+  // mới (người dùng nhảy vọt tới cuối trang vừa tải). Ghi lại vị trí trước khi tải rồi
+  // bù lại ngay sau khi DOM cập nhật, trước khi trình duyệt vẽ.
+  const anchorBeforeNewer = useRef<{ scrollTop: number; scrollHeight: number } | null>(null);
+  const loadNewerMessages = () => {
+    const el = listRef.current;
+    if (el) anchorBeforeNewer.current = { scrollTop: el.scrollTop, scrollHeight: el.scrollHeight };
+    // Promise resolve TRƯỚC khi React render data mới (TanStack báo component qua một
+    // nhịp hẹn giờ sau đó) — không xoá mốc ở đây khi thành công, để layout effect dùng.
+    // Chỉ bỏ mốc khi lỗi, để lần cập nhật sau không bù nhầm.
+    void messagesQuery.fetchPreviousPage().then((result) => {
+      if (result.isError) anchorBeforeNewer.current = null;
+    });
+  };
+  const firstPage = messagesQuery.data?.pages[0];
+  useLayoutEffect(() => {
+    const anchor = anchorBeforeNewer.current;
+    const el = listRef.current;
+    if (!anchor || !el) return;
+    anchorBeforeNewer.current = null;
+    el.scrollTop = anchor.scrollTop - (el.scrollHeight - anchor.scrollHeight);
+  }, [firstPage]);
+
+  // Gửi tin hoặc đính kèm file khi đang xem tin cũ: quay về tin mới nhất trước, nếu không
+  // tin vừa gửi (đến qua socket) sẽ bị bỏ qua và người dùng không thấy đâu.
+  const returnToLatest = async () => {
+    if (!newerWindowRef.current) return;
+    newerWindowRef.current = false;
+    await queryClient.resetQueries({ queryKey: ["messages", id] });
+    // Khung cuộn giữ nguyên vị trí cũ (đang sâu trong lịch sử) dù data đã thay — tự về
+    // cuối (flex-col-reverse: scrollTop 0 là đáy).
+    requestAnimationFrame(() => listRef.current?.scrollTo({ top: 0 }));
+  };
+
+  // Bấm vào trích dẫn hoặc kết quả tìm kiếm -> cuộn tới đúng tin + tô sáng ngắn. Tin chưa
+  // tải thì lấy cả cửa sổ quanh tin đó trong 1 request và thay cache bằng cửa sổ này —
+  // thời gian không phụ thuộc tin cách đây bao xa.
+  const handleJumpToMessage = async (messageId: string) => {
+    if (!document.getElementById(`message-${messageId}`)) {
+      // Cửa sổ vừa thay xong thì khung cuộn còn ở đáy — điểm kích hoạt tải tin mới hơn
+      // đang lọt khung nhìn, sẽ tự tải dồn hết trước khi kịp cuộn tới tin đích.
+      setSuppressNewer(true);
+      try {
+        const around = await getMessagesAround(id, messageId);
+        // Lưu `around` làm tham số trang: refetch (vd khi kết nối lại) tải lại đúng cửa
+        // sổ đang xem, không nhảy về tin mới nhất.
+        queryClient.setQueryData<MessagesCache>(["messages", id], {
+          pages: [around],
+          pageParams: [{ around: messageId }],
+        });
+        // Cập nhật ngay cho handler socket, không đợi render.
+        newerWindowRef.current = around.hasNewer;
+      } catch {
+        setSuppressNewer(false);
+        toast.info("Không tìm thấy tin nhắn trong đoạn chat");
+        return;
+      }
+      // Chờ cuộn mượt tới tin đích xong mới cho tải tiếp.
+      window.setTimeout(() => setSuppressNewer(false), 1200);
+    }
+    await new Promise((resolve) => requestAnimationFrame(() => setTimeout(resolve, 50)));
+    const el = document.getElementById(`message-${messageId}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    setHighlightedId(messageId);
+    window.setTimeout(() => {
+      setHighlightedId((current) => (current === messageId ? null : current));
+    }, 1500);
+  };
 
   const markReadIfNeeded = (messageId: string) => {
     if (lastMarkedReadId.current === messageId) return;
@@ -258,7 +321,7 @@ export default function Conversation() {
       // kể cả khi đang ở cửa sổ tin cũ (không chèn tin nhưng vẫn cần seenBy đúng).
       queryClient.invalidateQueries({ queryKey: ["conversations", "detail", id] });
       // Đang ở cửa sổ tin cũ: chèn vào đầu cache sẽ đặt tin sai chỗ (sau khoảng trống).
-      // Bỏ qua — bấm "Đến tin mới nhất" để tải lại đầy đủ.
+      // Bỏ qua — tin này sẽ tới khi cuộn xuống tải trang mới hơn hoặc bấm "Đến tin mới nhất".
       if (!newerWindowRef.current) {
         queryClient.setQueryData<MessagesCache>(["messages", id], (old) => prependMessage(old, message));
         if (message.sender.id !== myId) markReadIfNeeded(message.id);
@@ -564,21 +627,28 @@ export default function Conversation() {
         ) : !messagesQuery.isLoading && messages.length === 0 ? (
           <EmptyState icon={<MessageCircle className="size-10" />} title="Hãy bắt đầu trò chuyện" />
         ) : (
-          <div className="relative flex h-full flex-col-reverse overflow-y-auto px-3 py-2">
+          <div ref={listRef} className="relative flex h-full flex-col-reverse overflow-y-auto px-3 py-2">
+            {/* Phần tử đầu DOM nằm DƯỚI CÙNG (flex-col-reverse) — sticky để nút luôn
+                ghim ở đáy khung dù đang xem giữa cửa sổ tin cũ. */}
             {hasNewerWindow && (
-              <div className="flex justify-center py-2">
+              <div className="pointer-events-none sticky bottom-2 z-10 flex justify-center py-2">
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    setNewerWindowFor(null);
-                    void queryClient.resetQueries({ queryKey: ["messages", id] });
-                  }}
+                  className="pointer-events-auto shadow-md"
+                  onClick={() => void returnToLatest()}
                 >
                   Đến tin mới nhất
                 </Button>
               </div>
             )}
+            {/* Đáy danh sách: cuộn tới đây khi đang ở cửa sổ tin cũ thì tải trang tin mới hơn. */}
+            <InfiniteScrollSentinel
+              enabled={
+                !suppressNewer && !!messagesQuery.hasPreviousPage && !messagesQuery.isFetchingPreviousPage
+              }
+              onVisible={loadNewerMessages}
+            />
             {messages.map((item, index) => {
               const isOwn = item.sender.id === myId;
               // messages mới nhất trước (index 0) — nhờ flex-col-reverse nên

@@ -71,6 +71,13 @@ export function uploadMedia(
   });
 }
 
+// expo-image không vẽ được khung hình từ file video — Cloudinary trả ảnh
+// poster (khung giữa video) khi đổi đuôi file sang .jpg trên cùng đường dẫn.
+export function videoPosterUrl(videoUrl: string) {
+  if (!videoUrl.includes("/video/upload/")) return videoUrl;
+  return videoUrl.replace(/\.[a-z0-9]+$/i, ".jpg");
+}
+
 // Tải file Cloudinary về máy rồi mở màn chia sẻ/lưu của hệ điều hành — dùng
 // chung cho nút tải ở MediaViewer và bấm vào tin nhắn FILE trong Conversation.
 export async function downloadAndShare(url: string) {

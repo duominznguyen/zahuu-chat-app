@@ -1,7 +1,7 @@
 import { showToast } from "@/components/ui/toast";
 import { useCallStore } from "@/store/call-store";
 
-import { ApiError } from "./api-client";
+import { errorCodeOf } from "./api-client";
 import { ensureCallPermissions } from "./call-permissions";
 import {
   declineCall,
@@ -11,12 +11,7 @@ import {
   type CallType,
   type IncomingCallPayload,
 } from "./calls";
-
-function errorCodeOf(err: unknown) {
-  return err instanceof ApiError
-    ? (err.body as { code?: string } | undefined)?.code
-    : undefined;
-}
+import { DIRECT_BLOCKED_MESSAGE } from "./conversations";
 
 export async function beginCall(conversationId: string, type: CallType) {
   if (useCallStore.getState().active) {
@@ -39,11 +34,14 @@ export async function beginCall(conversationId: string, type: CallType) {
       answered: false,
     });
   } catch (err) {
-    showToast(
-      errorCodeOf(err) === "CALL_IN_PROGRESS"
-        ? "Cuộc trò chuyện này đang có cuộc gọi"
-        : "Không bắt đầu được cuộc gọi, vui lòng thử lại",
-    );
+    const code = errorCodeOf(err);
+    if (code === "CALL_IN_PROGRESS") {
+      showToast("Cuộc trò chuyện này đang có cuộc gọi");
+    } else if (code === "DIRECT_BLOCKED") {
+      showToast(DIRECT_BLOCKED_MESSAGE);
+    } else {
+      showToast("Không bắt đầu được cuộc gọi, vui lòng thử lại");
+    }
   }
 }
 
@@ -71,11 +69,10 @@ export async function joinExistingCall(
       answered: true,
     });
   } catch (err) {
-    showToast(
-      errorCodeOf(err) === "CALL_ENDED"
-        ? "Cuộc gọi đã kết thúc"
-        : "Không tham gia được cuộc gọi",
-    );
+    const code = errorCodeOf(err);
+    if (code === "CALL_ENDED") showToast("Cuộc gọi đã kết thúc");
+    else if (code === "DIRECT_BLOCKED") showToast(DIRECT_BLOCKED_MESSAGE);
+    else showToast("Không tham gia được cuộc gọi");
   } finally {
     store.clearIncoming();
   }

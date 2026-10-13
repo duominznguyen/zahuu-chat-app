@@ -6,6 +6,12 @@ export class ListMessagesDto {
   @IsUUID()
   cursor?: string;
 
+  // Lấy các tin MỚI HƠN tin này (thay vì cũ hơn như `cursor`) — để tải tiếp
+  // về phía tin mới sau khi nhảy tới 1 tin cũ qua /messages/around.
+  @IsOptional()
+  @IsUUID()
+  after?: string;
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()

@@ -12,10 +12,13 @@ import {
   confirm,
   useToast,
 } from "@/components/ui";
+import type { ActionSheetItem } from "@/components/ui/action-sheet";
 import { createDirectConversation } from "@/lib/conversations";
 import {
   blockUser,
+  cancelFriendRequest,
   getUserProfile,
+  listFriendRequests,
   sendFriendRequest,
   unblockUser,
   unfriend,
@@ -50,10 +53,41 @@ export default function UserProfile() {
     queryClient.invalidateQueries({ queryKey: ["friend-requests"] });
   };
 
+  // Profile không trả id lời mời — tra trong danh sách đã gửi để huỷ đúng lời mời.
+  const status = query.data?.relationshipStatus;
+  const sentQuery = useQuery({
+    queryKey: ["friend-requests", "sent"],
+    queryFn: () => listFriendRequests("sent"),
+    enabled: status === "pending_sent",
+  });
+  const sentRequestId = sentQuery.data?.find((r) => r.user.id === id)?.id;
+
+  // Lỗi thường do trạng thái đang hiển thị đã cũ (vd người kia vừa gửi lời
+  // mời/vừa chặn) — tải lại để màn tự đúng thay vì im lặng.
   const sendRequestMutation = useMutation({
     mutationFn: () => sendFriendRequest(id),
+    onSuccess: (res) => {
+      toast.show(
+        res.status === "accepted"
+          ? "Hai bạn đã là bạn bè"
+          : "Đã gửi lời mời kết bạn",
+      );
+      invalidateProfile();
+    },
+    onError: () => {
+      toast.show("Gửi lời mời thất bại, vui lòng thử lại");
+      invalidateProfile();
+    },
+  });
+
+  const cancelRequestMutation = useMutation({
+    mutationFn: (requestId: string) => cancelFriendRequest(requestId),
     onSuccess: () => {
-      toast.show("Đã gửi lời mời kết bạn");
+      toast.show("Đã hủy lời mời kết bạn");
+      invalidateProfile();
+    },
+    onError: () => {
+      toast.show("Hủy lời mời thất bại, vui lòng thử lại");
       invalidateProfile();
     },
   });
@@ -85,8 +119,11 @@ export default function UserProfile() {
 
   const messageMutation = useMutation({
     mutationFn: () => createDirectConversation(id),
+    // dismissTo thay vì push: mở hồ sơ từ chính đoạn chat đó (Thông tin → Xem
+    // trang cá nhân) thì quay về đúng màn chat cũ, không chồng thêm 1 bản thứ 2
+    // của cùng đoạn chat (2 bản cùng mount gây trùng listener socket).
     onSuccess: (conv) => {
-      router.push(`/conversation/${conv.id}`);
+      router.dismissTo(`/conversation/${conv.id}`);
     },
   });
 
@@ -102,7 +139,42 @@ export default function UserProfile() {
   }
 
   const user = query.data;
-  const status = user.relationshipStatus;
+
+  const menuItems: ActionSheetItem[] = [
+    ...(status === "friends"
+      ? [
+          {
+            key: "unfriend",
+            label: "Hủy kết bạn",
+            icon: "person-remove-outline" as const,
+            destructive: true,
+            onPress: async () => {
+              const ok = await confirm({
+                title: "Hủy kết bạn?",
+                destructive: true,
+                confirmLabel: "Hủy kết bạn",
+              });
+              if (ok) unfriendMutation.mutate();
+            },
+          },
+        ]
+      : []),
+    // Chặn được cả người lạ (vd người nhắn tin tới qua @username), không chỉ bạn bè.
+    {
+      key: "block",
+      label: "Chặn",
+      icon: "ban-outline",
+      destructive: true,
+      onPress: async () => {
+        const ok = await confirm({
+          title: "Chặn người này?",
+          destructive: true,
+          confirmLabel: "Chặn",
+        });
+        if (ok) blockMutation.mutate();
+      },
+    },
+  ];
 
   return (
     <View className="flex-1 bg-white dark:bg-zinc-950">
@@ -136,17 +208,12 @@ export default function UserProfile() {
 
           <View className="w-full gap-3 pt-4">
             {status === "friends" && (
-              <>
-                <Button
-                  loading={messageMutation.isPending}
-                  onPress={() => messageMutation.mutate()}
-                >
-                  Nhắn tin
-                </Button>
-                <Button variant="secondary" onPress={() => setMenuOpen(true)}>
-                  Thêm tùy chọn
-                </Button>
-              </>
+              <Button
+                loading={messageMutation.isPending}
+                onPress={() => messageMutation.mutate()}
+              >
+                Nhắn tin
+              </Button>
             )}
 
             {status === "none" && (
@@ -159,7 +226,21 @@ export default function UserProfile() {
             )}
 
             {status === "pending_sent" && (
-              <Button disabled>Đã gửi lời mời</Button>
+              <>
+                <Text className="text-center text-zinc-500 dark:text-zinc-400">
+                  Đã gửi lời mời kết bạn
+                </Text>
+                <Button
+                  variant="secondary"
+                  disabled={!sentRequestId}
+                  loading={cancelRequestMutation.isPending}
+                  onPress={() =>
+                    sentRequestId && cancelRequestMutation.mutate(sentRequestId)
+                  }
+                >
+                  Hủy lời mời
+                </Button>
+              </>
             )}
 
             {status === "pending_received" && (
@@ -185,6 +266,12 @@ export default function UserProfile() {
                 Bỏ chặn
               </Button>
             )}
+
+            {status !== "blocked" && (
+              <Button variant="secondary" onPress={() => setMenuOpen(true)}>
+                Thêm tùy chọn
+              </Button>
+            )}
           </View>
         </View>
       </ScrollView>
@@ -192,36 +279,7 @@ export default function UserProfile() {
       <ActionSheet
         visible={menuOpen}
         onClose={() => setMenuOpen(false)}
-        items={[
-          {
-            key: "unfriend",
-            label: "Hủy kết bạn",
-            icon: "person-remove-outline",
-            destructive: true,
-            onPress: async () => {
-              const ok = await confirm({
-                title: "Hủy kết bạn?",
-                destructive: true,
-                confirmLabel: "Hủy kết bạn",
-              });
-              if (ok) unfriendMutation.mutate();
-            },
-          },
-          {
-            key: "block",
-            label: "Chặn",
-            icon: "ban-outline",
-            destructive: true,
-            onPress: async () => {
-              const ok = await confirm({
-                title: "Chặn người này?",
-                destructive: true,
-                confirmLabel: "Chặn",
-              });
-              if (ok) blockMutation.mutate();
-            },
-          },
-        ]}
+        items={menuItems}
       />
     </View>
   );

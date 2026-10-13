@@ -47,6 +47,7 @@ export function Header({
       className="flex-row items-center border-b border-zinc-200 bg-white dark:border-zinc-800 dark:bg-zinc-900"
     >
       <Pressable
+        accessibilityLabel="Quay lại"
         onPress={onBack ?? (() => router.back())}
         className="h-12 w-12 items-center justify-center"
       >

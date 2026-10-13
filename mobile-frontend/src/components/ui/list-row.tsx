@@ -1,7 +1,10 @@
 import type { ReactNode } from "react";
-import { Pressable, Text, View } from "react-native";
+import { Pressable, Text, View, type PressableProps } from "react-native";
 
-interface ListRowProps {
+interface ListRowProps extends Pick<
+  PressableProps,
+  "accessibilityLabel" | "accessibilityRole" | "aria-checked"
+> {
   leading?: ReactNode;
   title: string;
   titleClassName?: string;
@@ -21,9 +24,11 @@ export function ListRow({
   trailing,
   onPress,
   onLongPress,
+  ...accessibility
 }: ListRowProps) {
   return (
     <Pressable
+      {...accessibility}
       onPress={onPress}
       onLongPress={onLongPress}
       className="flex-row items-center gap-3 px-4 py-3 active:bg-zinc-100 dark:active:bg-zinc-800"

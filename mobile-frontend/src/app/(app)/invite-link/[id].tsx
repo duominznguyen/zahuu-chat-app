@@ -19,10 +19,7 @@ import {
   revokeInviteLink,
   type InviteLink,
 } from "@/lib/conversations";
-
-function linkUrl(token: string) {
-  return `zahuu://invite/${token}`;
-}
+import { inviteUrl as linkUrl } from "@/lib/invite-link";
 
 export default function InviteLinkScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();

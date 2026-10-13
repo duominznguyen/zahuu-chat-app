@@ -116,6 +116,7 @@ export class MessagesService {
 
   async listMessages(membership: ConversationMembership, dto: ListMessagesDto) {
     const take = dto.limit ?? LIST_DEFAULT_LIMIT;
+    if (dto.after) return this.listNewerMessages(membership, dto.after, take);
 
     const messages = await this.prisma.message.findMany({
       where: {
@@ -132,6 +133,47 @@ export class MessagesService {
     const page = messages.slice(0, take);
     const items = await this.toViewsWithReactions(page);
     return { items, nextCursor: hasMore ? page[page.length - 1].id : null };
+  }
+
+  /** Trang tin MỚI HƠN 1 tin (vẫn trả mới nhất trước như listMessages). `hasNewer`
+   *  cho client biết đã chạm tin mới nhất của đoạn chat hay chưa. */
+  private async listNewerMessages(
+    membership: ConversationMembership,
+    afterId: string,
+    take: number,
+  ) {
+    const visible = {
+      conversationId: membership.conversationId,
+      deletions: { none: { userId: membership.userId } },
+    };
+    // Không lọc theo deletions: tin mốc có thể vừa bị xoá-cho-mình, vẫn dùng
+    // được làm mốc thời gian.
+    const anchor = await this.prisma.message.findFirst({
+      where: { id: afterId, conversationId: membership.conversationId },
+      select: { id: true, createdAt: true },
+    });
+    if (!anchor) throw new NotFoundException('Không tìm thấy tin nhắn');
+
+    const newer = await this.prisma.message.findMany({
+      where: {
+        ...visible,
+        OR: [
+          { createdAt: { gt: anchor.createdAt } },
+          { createdAt: anchor.createdAt, id: { gt: anchor.id } },
+        ],
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      take: take + 1,
+      include: messageInclude,
+    });
+    const hasNewer = newer.length > take;
+    const page = newer.slice(0, take).reverse();
+    const items = await this.toViewsWithReactions(page);
+    // nextCursor = tin cũ nhất của trang: client refetch cả danh sách (vd khi
+    // kết nối lại) dò các trang sau theo nextCursor của trang trước — trả null
+    // ở đây sẽ làm mất toàn bộ các trang cũ hơn bên dưới trang này.
+    const nextCursor = page.length ? page[page.length - 1].id : afterId;
+    return { items, nextCursor, hasNewer };
   }
 
   /** Cửa sổ tin quanh 1 tin (mới nhất trước). Thời gian không phụ thuộc khoảng cách tới tin đó. */
